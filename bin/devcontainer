@@ -1,0 +1,1034 @@
+#!/usr/bin/env python3
+"""Manage the JVM build-tool devcontainer.
+"""
+
+import argparse
+import json
+import os
+import posixpath
+import shlex
+import shutil
+import stat
+import subprocess
+import sys
+
+
+DEFAULT_IMAGE = "ghcr.io/alexandru/devcontainer:latest"
+DEFAULT_AGENT_PORT = "10012"
+DEFAULT_HOME_VOLUME = "devcontainer-home"
+CONTAINER_NAME = "devcontainer"
+CONTAINER_LABEL = "com.alexandru.devcontainer=true"
+HOME_VOLUME_LABEL = "com.alexandru.devcontainer.home-volume"
+OPENCODE_CONFIG_CONTAINER_DIR = "/opt/opencode-config"
+WORKSPACE_LINK = "/workspace"
+EXEC_WORKDIR = "/workspace"
+CONTAINER_USER = "dev"
+ROOT_USER = "root"
+
+AUTH_ENV_NAMES = (
+    "302AI_API_KEY",
+    "ABACUS_API_KEY",
+    "ABLIT_KEY",
+    "AI_GATEWAY_API_KEY",
+    "AICORE_SERVICE_KEY",
+    "AIHUBMIX_API_KEY",
+    "ALIBABA_CODING_PLAN_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_BEARER_TOKEN_BEDROCK",
+    "AWS_REGION",
+    "AWS_SECRET_ACCESS_KEY",
+    "AZURE_API_KEY",
+    "AZURE_COGNITIVE_SERVICES_API_KEY",
+    "AZURE_COGNITIVE_SERVICES_RESOURCE_NAME",
+    "AZURE_RESOURCE_NAME",
+    "BAILING_API_TOKEN",
+    "BASETEN_API_KEY",
+    "CEREBRAS_API_KEY",
+    "CHUTES_API_KEY",
+    "CLOUDFERRO_SHERLOCK_API_KEY",
+    "CLOUDFLARE_ACCOUNT_ID",
+    "CLOUDFLARE_API_KEY",
+    "CLOUDFLARE_API_TOKEN",
+    "CLOUDFLARE_GATEWAY_ID",
+    "COHERE_API_KEY",
+    "CORTECS_API_KEY",
+    "DASHSCOPE_API_KEY",
+    "DATABRICKS_HOST",
+    "DATABRICKS_TOKEN",
+    "DEEPINFRA_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "DIGITALOCEAN_ACCESS_TOKEN",
+    "DINFERENCE_API_KEY",
+    "EVROC_API_KEY",
+    "FASTROUTER_API_KEY",
+    "FIREPASS_API_KEY",
+    "FIREWORKS_API_KEY",
+    "FRIENDLI_TOKEN",
+    "FROGBOT_API_KEY",
+    "GEMINI_API_KEY",
+    "GITHUB_TOKEN",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GOOGLE_GENERATIVE_AI_API_KEY",
+    "GOOGLE_VERTEX_LOCATION",
+    "GOOGLE_VERTEX_PROJECT",
+    "GROQ_API_KEY",
+    "HELICONE_API_KEY",
+    "HF_TOKEN",
+    "IFLOW_API_KEY",
+    "INFERENCE_API_KEY",
+    "INCEPTION_API_KEY",
+    "IOINTELLIGENCE_API_KEY",
+    "JIEKOU_API_KEY",
+    "KILO_API_KEY",
+    "KIMI_API_KEY",
+    "KUAE_API_KEY",
+    "LLAMA_API_KEY",
+    "LLMGATEWAY_API_KEY",
+    "LMSTUDIO_API_KEY",
+    "LUCIDQUERY_API_KEY",
+    "MEGANOVA_API_KEY",
+    "MINIMAX_API_KEY",
+    "MISTRAL_API_KEY",
+    "MIXLAYER_API_KEY",
+    "MOARK_API_KEY",
+    "MOONSHOT_API_KEY",
+    "MORPH_API_KEY",
+    "NANO_GPT_API_KEY",
+    "NEBIUS_API_KEY",
+    "NOVITA_API_KEY",
+    "NVIDIA_API_KEY",
+    "OLLAMA_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENCODE_API_KEY",
+    "OPENROUTER_API_KEY",
+    "OVHCLOUD_API_KEY",
+    "PERPLEXITY_API_KEY",
+    "POE_API_KEY",
+    "PRIVATEMODE_API_KEY",
+    "PRIVATEMODE_ENDPOINT",
+    "QINIU_API_KEY",
+    "REQUESTY_API_KEY",
+    "SCALEWAY_API_KEY",
+    "SILICONFLOW_API_KEY",
+    "SILICONFLOW_CN_API_KEY",
+    "STACKIT_API_KEY",
+    "STEPFUN_API_KEY",
+    "SUBMODEL_INSTAGEN_ACCESS_KEY",
+    "SYNTHETIC_API_KEY",
+    "TENCENT_CODING_PLAN_API_KEY",
+    "THEGRIDAI_API_KEY",
+    "UPSTAGE_API_KEY",
+    "V0_API_KEY",
+    "VENICE_API_KEY",
+    "VIVGRID_API_KEY",
+    "VULTR_API_KEY",
+    "WAFER_API_KEY",
+    "WANDB_API_KEY",
+    "XAI_API_KEY",
+    "XIAOMI_API_KEY",
+    "ZENMUX_API_KEY",
+    "ZHIPU_API_KEY",
+)
+
+IMAGE = os.environ.get("DEVCONTAINER_IMAGE") or DEFAULT_IMAGE
+HOME_VOLUME_NAME = os.environ.get("DEVCONTAINER_HOME_VOLUME") or DEFAULT_HOME_VOLUME
+LEGACY_HOME_VOLUME_PREFIX = os.environ.get("DEVCONTAINER_HOME_VOLUME_PREFIX") or f"{HOME_VOLUME_NAME}-"
+
+def canonical_dir(path, description):
+    if not os.path.isdir(path):
+        print(f"{description} directory does not exist: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    return os.path.realpath(path)
+
+
+def project_path(path):
+    return canonical_dir(path, "Project")
+
+
+def path_is_within(path, parent):
+    try:
+        return os.path.commonpath([path, parent]) == parent
+    except ValueError:
+        return False
+
+
+def git_rev_parse_dir(project_dir, option):
+    try:
+        result = subprocess.run(
+            ["git", "-C", project_dir, "rev-parse", "--path-format=absolute", option],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return ""
+
+    if result.returncode != 0:
+        return ""
+
+    path = result.stdout.strip()
+    if not path:
+        return ""
+
+    return os.path.realpath(path)
+
+
+def project_mount_path(project_dir):
+    paths = [project_dir]
+
+    for option in ("--git-dir", "--git-common-dir"):
+        path = git_rev_parse_dir(project_dir, option)
+        if path:
+            paths.append(path)
+
+    return os.path.commonpath(paths)
+
+
+def opencode_config_path(path):
+    return canonical_dir(path, "OpenCode config")
+
+
+def home_volume():
+    return HOME_VOLUME_NAME
+
+
+def is_wslc_cli(container_cli):
+    return os.path.basename(container_cli).lower() in {"wslc", "wslc.exe"}
+
+
+def normalize_container_path(path):
+    if path.startswith("\\\\wsl.localhost\\") or path.startswith("\\\\wsl$\\"):
+        parts = path.split("\\")
+        if len(parts) > 4:
+            return "/" + "/".join(parts[4:])
+    return path
+
+
+def yaml_quote(value):
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def auth_env_name(name):
+    return f"DEVCONTAINER_AUTH_{name}"
+
+
+def configured_auth_envs():
+    auth_envs = {}
+
+    for name in AUTH_ENV_NAMES:
+        source_name = auth_env_name(name)
+        value = os.environ.get(source_name)
+        if not value:
+            continue
+
+        auth_envs[name] = (source_name, value)
+
+    return auth_envs
+
+
+def auth_environment_help():
+    return "\n".join(
+        f"  {auth_env_name(name):<48} Forwarded as {name}."
+        for name in AUTH_ENV_NAMES
+    )
+
+
+def has_ssh_auth_sock():
+    path = os.environ.get("SSH_AUTH_SOCK", "")
+    if not path:
+        return False
+    try:
+        return stat.S_ISSOCK(os.stat(path).st_mode)
+    except OSError:
+        return False
+
+
+def find_container_cli():
+    configured = os.environ.get("CONTAINER_CLI")
+    if configured:
+        return configured
+
+    for cli in ("wslc.exe", "wslc", "docker", "podman"):
+        path = shutil.which(cli)
+        if path:
+            return path
+
+    return None
+
+
+def ordered_add(values, value):
+    if value and value not in values:
+        values.append(value)
+
+
+class DevContainer:
+    def __init__(self, command, project_dir="", command_args=None, container_cli=None, execution_dir=""):
+        self.command = command
+        self.project_dir = project_dir
+        self.project_mount_dir = project_mount_path(project_dir) if project_dir else ""
+        self.project_container_dir = project_dir
+        self.project_container_mount_dir = self.project_mount_dir
+        self.command_args = list(command_args or [])
+        self.execution_dir = execution_dir
+        self.container_cli = container_cli or ""
+        self.container_name = CONTAINER_NAME
+        self.home_volume = home_volume()
+        self.opencode_config_host_dir = ""
+        self.agent_port = ""
+        self.container_env_args = []
+
+    def uses_wslc(self):
+        return is_wslc_cli(self.container_cli)
+
+    def uses_podman(self):
+        return os.path.basename(self.container_cli).lower() in {"podman", "podman.exe"}
+
+    def inspect_args(self):
+        if self.uses_podman():
+            return ["container", "inspect"]
+        return ["inspect"]
+
+    def run_cli(self, args, *, stdout=None, stderr=None, capture=False, check=False):
+        command = [self.container_cli, *args]
+        if capture:
+            result = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL if stderr is None else stderr,
+                text=True,
+                check=False,
+            )
+        else:
+            result = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)
+
+        if check and result.returncode != 0:
+            raise SystemExit(result.returncode)
+        return result
+
+    def inspect_objects(self, *names):
+        result = self.run_cli([*self.inspect_args(), *names], capture=True)
+        if result.returncode != 0 or not result.stdout.strip():
+            return []
+
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return []
+
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict):
+            return [payload]
+        return []
+
+    def inspect_object(self, name):
+        objects = self.inspect_objects(name)
+        return objects[0] if objects else {}
+
+    def configure_opencode_config_mount(self):
+        config_dir = os.environ.get("DEVCONTAINER_OPENCODE_CONFIG_DIR")
+        if config_dir:
+            self.opencode_config_host_dir = opencode_config_path(config_dir)
+
+    def configure_container_env_args(self):
+        self.container_env_args = []
+
+        for target, (_, value) in configured_auth_envs().items():
+            self.container_env_args.extend(["-e", f"{target}={value}"])
+
+        if self.opencode_config_host_dir:
+            self.container_env_args.extend(["-e", f"OPENCODE_CONFIG_DIR={OPENCODE_CONFIG_CONTAINER_DIR}"])
+
+    def configure_agent_port(self):
+        self.agent_port = os.environ.get("DEVCONTAINER_AGENT_PORT", "")
+        if self.command in {"start", "compose"} and not self.agent_port:
+            self.agent_port = DEFAULT_AGENT_PORT
+
+    def container_inspect(self):
+        return self.inspect_object(self.container_name)
+
+    def container_exists(self):
+        return bool(self.container_inspect())
+
+    def container_running_state(self, container):
+        state = container.get("State", {}) if container else {}
+        return isinstance(state, dict) and bool(state.get("Running"))
+
+    def assert_container_running(self):
+        container = self.container_inspect()
+        if self.container_running_state(container):
+            return
+        if container:
+            print(f"Container is not running: {self.container_name}", file=sys.stderr)
+            print(
+                f"Run `{sys.argv[0]} start <project-directory>` to start it.",
+                file=sys.stderr,
+            )
+        else:
+            print(f"Container does not exist: {self.container_name}", file=sys.stderr)
+            print(
+                f"Run `{sys.argv[0]} start <project-directory>` to create it.",
+                file=sys.stderr,
+            )
+        raise SystemExit(1)
+
+    def container_mount_source(self, destination):
+        container = self.inspect_object(self.container_name)
+        for mount in container.get("Mounts", []):
+            if mount.get("Destination") == destination:
+                return normalize_container_path(mount.get("Source", ""))
+        return ""
+
+    def container_opencode_config_source(self):
+        return self.container_mount_source(OPENCODE_CONFIG_CONTAINER_DIR)
+
+    def container_project_mount_source(self):
+        return self.container_mount_source(self.project_container_mount_dir)
+
+    def container_working_dir(self):
+        container = self.inspect_object(self.container_name)
+        return container.get("Config", {}).get("WorkingDir", "")
+
+    def container_workspace_mount(self):
+        container = self.container_inspect()
+        workdir = container.get("Config", {}).get("WorkingDir", "")
+        if not workdir:
+            return "", ""
+
+        candidates = []
+        for mount in container.get("Mounts", []):
+            source = normalize_container_path(mount.get("Source", ""))
+            destination = mount.get("Destination", "")
+            if not source or not destination:
+                continue
+            if not posixpath.commonpath([workdir, destination]) == destination:
+                continue
+            candidates.append((destination, source))
+
+        if not candidates:
+            print("Container does not have a workspace bind mount.", file=sys.stderr)
+            raise SystemExit(1)
+
+        destination, source = min(candidates, key=lambda mount: len(mount[0]))
+        return os.path.realpath(source), destination
+
+    def container_directory(self, host_directory):
+        requested_dir = canonical_dir(host_directory, "Requested")
+        host_mount_dir, container_mount_dir = self.container_workspace_mount()
+
+        if not path_is_within(requested_dir, host_mount_dir):
+            print(
+                f"Requested directory is outside the started workspace: {requested_dir}",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+
+        relative_path = os.path.relpath(requested_dir, host_mount_dir)
+        if relative_path == ".":
+            return container_mount_dir
+        return posixpath.normpath(posixpath.join(container_mount_dir, relative_path))
+
+    def container_agent_ports(self):
+        container = self.inspect_object(self.container_name)
+        bindings = container.get("HostConfig", {}).get("PortBindings", {}).get("10012/tcp") or []
+        if not bindings:
+            bindings = container.get("Ports", {}).get("10012/tcp") or []
+        return [binding.get("HostPort", "") for binding in bindings if binding.get("HostPort")]
+
+    def ensure_opencode_config_mount(self):
+        if not self.opencode_config_host_dir:
+            return
+
+        source = self.container_opencode_config_source()
+        if source != self.opencode_config_host_dir:
+            print(
+                "Container already exists without the requested OpenCode config mount.",
+                file=sys.stderr,
+            )
+            print(
+                f"Run `{sys.argv[0]} purge` and start it again to apply DEVCONTAINER_OPENCODE_CONFIG_DIR.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+
+    def ensure_agent_port(self):
+        if not self.agent_port:
+            return
+
+        if self.agent_port in self.container_agent_ports():
+            return
+
+        print(
+            f"Container already exists without host port {self.agent_port} mapped to container port 10012.",
+            file=sys.stderr,
+        )
+        print(
+            f"Run `{sys.argv[0]} purge` and start it again to apply DEVCONTAINER_AGENT_PORT.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    def ensure_project_mount(self):
+        if self.container_project_mount_source() != self.project_mount_dir:
+            print(
+                "Container already exists with an outdated project mount.",
+                file=sys.stderr,
+            )
+            print(
+                f"Run `{sys.argv[0]} purge` and start it again "
+                "to mount the project at its full container path.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+
+        if self.container_working_dir() != self.project_container_dir:
+            print(
+                "Container already exists with an outdated working directory.",
+                file=sys.stderr,
+            )
+            print(
+                f"Run `{sys.argv[0]} purge` and start it again "
+                f"to use {self.project_container_dir}.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+
+    def start_container(self, *, announce=True):
+        if self.container_exists():
+            self.ensure_project_mount()
+            self.ensure_opencode_config_mount()
+            self.ensure_agent_port()
+            self.run_cli(
+                ["start", self.container_name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            self.create_home_volume()
+            self.run_new_container()
+
+        if announce:
+            self.print_start_summary()
+
+    def create_home_volume(self):
+        self.run_cli(
+            [
+                "volume",
+                "create",
+                "--label",
+                CONTAINER_LABEL,
+                "--label",
+                f"{HOME_VOLUME_LABEL}={self.home_volume}",
+                self.home_volume,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    def ssh_args(self):
+        if not has_ssh_auth_sock():
+            return []
+
+        ssh_auth_sock = os.environ["SSH_AUTH_SOCK"]
+        return ["-v", f"{ssh_auth_sock}:{ssh_auth_sock}", "-e", f"SSH_AUTH_SOCK={ssh_auth_sock}"]
+
+    def opencode_config_mount_args(self):
+        if not self.opencode_config_host_dir:
+            return []
+
+        return [
+            "-v",
+            f"{self.opencode_config_host_dir}:{OPENCODE_CONFIG_CONTAINER_DIR}",
+        ]
+
+    def agent_port_args(self):
+        if not self.agent_port:
+            return []
+
+        return ["-p", f"{self.agent_port}:10012"]
+
+    def workspace_link_command(self):
+        return (
+            f"rm -rf {WORKSPACE_LINK} && "
+            f"ln -s {shlex.quote(self.project_container_dir)} {WORKSPACE_LINK} && "
+            "exec sleep infinity"
+        )
+
+    def run_new_container(self):
+        self.run_cli(
+            [
+                "run",
+                "-d",
+                "--name",
+                self.container_name,
+                "--label",
+                CONTAINER_LABEL,
+                "--label",
+                f"{HOME_VOLUME_LABEL}={self.home_volume}",
+                "--user",
+                ROOT_USER,
+                "-v",
+                f"{self.project_mount_dir}:{self.project_container_mount_dir}",
+                "-v",
+                f"{self.home_volume}:/home/dev",
+                *self.ssh_args(),
+                *self.container_env_args,
+                *self.opencode_config_mount_args(),
+                *self.agent_port_args(),
+                "-w",
+                self.project_container_dir,
+                IMAGE,
+                "/bin/sh",
+                "-lc",
+                self.workspace_link_command(),
+            ],
+            stdout=subprocess.DEVNULL,
+            check=True,
+        )
+
+    def print_start_summary(self):
+        print(f"Container: {self.container_name}")
+        print(f"Project:   {self.project_mount_dir} -> {self.project_container_mount_dir}")
+        print(f"Workdir:   {self.project_container_dir}")
+        print(f"Symlink:   {WORKSPACE_LINK} -> {self.project_container_dir}")
+        print(f"Home:      {self.home_volume} -> /home/dev")
+        print(
+            "Shell:     "
+            f"{shlex.quote(self.container_cli)} exec -it {shlex.quote(self.container_name)} bash"
+        )
+
+    def exec_container(self, args):
+        workdir = self.execution_dir or self.project_container_dir or EXEC_WORKDIR
+        command = [
+            self.container_cli,
+            "exec",
+            "-it",
+            "-u",
+            CONTAINER_USER,
+            "-w",
+            workdir,
+            "-e",
+            f"TERM={os.environ.get('TERM') or 'xterm-256color'}",
+            *self.container_env_args,
+            self.container_name,
+            "/usr/local/bin/devcontainer-entrypoint",
+            *args,
+        ]
+        os.execvp(self.container_cli, command)
+
+    def stop_container(self):
+        container = self.container_inspect()
+        if not container:
+            print(f"Container does not exist: {self.container_name}")
+            return
+        if not self.container_running_state(container):
+            print(f"Container is not running: {self.container_name}")
+            return
+        self.run_cli(
+            ["stop", self.container_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print(f"Stopped: {self.container_name}")
+
+    def shell_container(self):
+        self.assert_container_running()
+        self.execution_dir = self.container_directory(self.execution_dir or os.curdir)
+        self.exec_container(["bash"])
+
+    def exec_command(self):
+        self.assert_container_running()
+        self.exec_container(self.command_args)
+
+    def agent(self):
+        self.assert_container_running()
+        self.execution_dir = self.container_directory(self.execution_dir or os.curdir)
+        self.exec_container(["opencode", *self.command_args])
+
+    def agent_serve(self):
+        self.assert_container_running()
+        self.exec_container(["opencode", "serve", "--port", "10012", "--hostname", "0.0.0.0"])
+
+    def compose_file(self):
+        self.compose_service()
+        self.compose_home_volume()
+
+    def compose_service(self):
+        print("services:")
+        print("  devcontainer:")
+        print(f'    image: "${{DEVCONTAINER_IMAGE:-{DEFAULT_IMAGE}}}"')
+        print(f"    container_name: {yaml_quote(self.container_name)}")
+        print(f"    user: {yaml_quote(ROOT_USER)}")
+        print(f"    working_dir: {yaml_quote(self.project_container_dir)}")
+        print("    command:")
+        print("      - /bin/sh")
+        print("      - -lc")
+        print(f"      - {yaml_quote(self.workspace_link_command())}")
+
+        if self.agent_port:
+            print("    ports:")
+            print('      - "${DEVCONTAINER_AGENT_PORT}:10012"')
+
+        print("    labels:")
+        print('      com.alexandru.devcontainer: "true"')
+        print(f"      {HOME_VOLUME_LABEL}: {yaml_quote(self.home_volume)}")
+
+        self.compose_environment()
+        self.compose_mounts()
+
+    def compose_environment(self):
+        auth_envs = configured_auth_envs()
+        if not (auth_envs or self.opencode_config_host_dir or has_ssh_auth_sock()):
+            return
+
+        print("    environment:")
+
+        for target, (source, _) in auth_envs.items():
+            print(f'      {target}: "${{{source}}}"')
+
+        if self.opencode_config_host_dir:
+            print(f"      OPENCODE_CONFIG_DIR: {yaml_quote(OPENCODE_CONFIG_CONTAINER_DIR)}")
+
+        if has_ssh_auth_sock():
+            print('      SSH_AUTH_SOCK: "${SSH_AUTH_SOCK}"')
+
+    def compose_mounts(self):
+        print("    volumes:")
+        print("      - type: bind")
+        print(f"        source: {yaml_quote(self.project_mount_dir)}")
+        print(f"        target: {yaml_quote(self.project_container_mount_dir)}")
+        print("      - type: volume")
+        print("        source: home")
+        print("        target: /home/dev")
+
+        if self.opencode_config_host_dir:
+            print("      - type: bind")
+            print('        source: "${DEVCONTAINER_OPENCODE_CONFIG_DIR}"')
+            print(f"        target: {yaml_quote(OPENCODE_CONFIG_CONTAINER_DIR)}")
+
+        if has_ssh_auth_sock():
+            print("      - type: bind")
+            print('        source: "${SSH_AUTH_SOCK}"')
+            print('        target: "${SSH_AUTH_SOCK}"')
+
+    def compose_home_volume(self):
+        print()
+        print("volumes:")
+        print("  home:")
+        print(f"    name: {yaml_quote(self.home_volume)}")
+        print("    labels:")
+        print('      com.alexandru.devcontainer: "true"')
+
+    def purge_container(self):
+        if self.container_exists():
+            self.run_cli(
+                ["rm", "-f", self.container_name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            print(f"Deleted container: {self.container_name}")
+        else:
+            print(f"Container does not exist: {self.container_name}")
+
+    def restart_container(self):
+        container = self.container_inspect()
+        if not container:
+            print(f"Container does not exist: {self.container_name}", file=sys.stderr)
+            print(
+                f"Run `{sys.argv[0]} start <project-directory>` to create it.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+
+        if self.uses_wslc():
+            if self.container_running_state(container):
+                self.run_cli(
+                    ["stop", self.container_name],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=True,
+                )
+            self.run_cli(
+                ["start", self.container_name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+            )
+        else:
+            self.run_cli(
+                ["restart", self.container_name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+            )
+        print(f"Restarted: {self.container_name}")
+
+    def collect_container_ids(self, container_ids, filter_arg):
+        result = self.run_cli(
+            ["ps", "-aq", "--filter", filter_arg],
+            capture=True,
+        )
+        if result.returncode != 0:
+            return
+        for container_id in result.stdout.splitlines():
+            ordered_add(container_ids, container_id)
+
+    def list_volume_names(self):
+        result = self.run_cli(["volume", "ls", "-q"], capture=True)
+        if result.returncode == 0:
+            return [str(line) for line in result.stdout.splitlines() if line]
+
+        result = self.run_cli(["volume", "list", "-q"], capture=True)
+        if result.returncode == 0:
+            return [str(line) for line in result.stdout.splitlines() if line]
+
+        return []
+
+    def collect_devcontainer_volume_names(self, volume_names):
+        for volume_name in self.list_volume_names():
+            if volume_name == HOME_VOLUME_NAME or volume_name.startswith(LEGACY_HOME_VOLUME_PREFIX):
+                ordered_add(volume_names, volume_name)
+
+        if self.uses_wslc():
+            return
+
+        result = self.run_cli(["volume", "ls", "-q", "--filter", f"label={CONTAINER_LABEL}"], capture=True)
+        if result.returncode != 0:
+            return
+        for volume_name in result.stdout.splitlines():
+            ordered_add(volume_names, volume_name)
+
+    def collect_container_home_volumes(self, volume_names, container_id):
+        container = self.inspect_object(container_id)
+        for mount in container.get("Mounts", []):
+            if mount.get("Destination") == "/home/dev":
+                ordered_add(volume_names, mount.get("Name", ""))
+
+    def purge_volume(self, volume_name):
+        if self.run_cli(
+            ["volume", "inspect", volume_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode != 0:
+            print(f"Volume does not exist: {volume_name}")
+            return
+
+        if self.run_cli(
+            ["volume", "rm", "-f", volume_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode == 0:
+            print(f"Deleted volume: {volume_name}")
+        else:
+            print(f"Failed to delete volume: {volume_name}", file=sys.stderr)
+
+    def purge_volumes(self, volume_names):
+        if not volume_names:
+            print("No devcontainer volumes found.")
+            return
+
+        for volume_name in volume_names:
+            self.purge_volume(volume_name)
+
+    def purge_all(self):
+        container_ids = []
+        volume_names = []
+
+        self.collect_container_ids(container_ids, f"ancestor={IMAGE}")
+        self.collect_container_ids(container_ids, f"label={CONTAINER_LABEL}")
+
+        for container_id in container_ids:
+            self.collect_container_home_volumes(volume_names, container_id)
+
+        self.collect_devcontainer_volume_names(volume_names)
+
+        if container_ids:
+            self.run_cli(
+                ["rm", "-f", *container_ids],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            print(f"Deleted devcontainer containers: {len(container_ids)}")
+        else:
+            print("No devcontainer containers found.")
+
+        self.purge_volumes(volume_names)
+
+    def update_image(self):
+        self.run_cli(["pull", IMAGE], check=True)
+
+
+ENVIRONMENT_HELP = f"""
+Environment:
+  CONTAINER_CLI                     Container CLI to use. Defaults to first available wslc.exe, wslc, docker, or podman.
+  DEVCONTAINER_IMAGE                Image to run. Defaults to {IMAGE}.
+  DEVCONTAINER_AGENT_PORT           Host port for container port 10012; `start` defaults to {DEFAULT_AGENT_PORT}.
+  DEVCONTAINER_HOME_VOLUME          Shared /home/dev volume name. Defaults to {HOME_VOLUME_NAME}.
+  DEVCONTAINER_HOME_VOLUME_PREFIX   Legacy per-workspace /home/dev volume prefix removed by purge-all. Defaults to {LEGACY_HOME_VOLUME_PREFIX}.
+  DEVCONTAINER_OPENCODE_CONFIG_DIR  Optional host config directory mounted read-write; sets OPENCODE_CONFIG_DIR={OPENCODE_CONFIG_CONTAINER_DIR} inside the container.
+{auth_environment_help()}
+"""
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog=os.path.basename(sys.argv[0]),
+        description="Manage the JVM build-tool devcontainer.",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    def add_project_command(name, help_text):
+        command_parser = subparsers.add_parser(name, help=help_text, description=help_text)
+        command_parser.add_argument("project_directory")
+        return command_parser
+
+    def add_simple_command(name, help_text):
+        return subparsers.add_parser(name, help=help_text, description=help_text)
+
+    def add_passthrough_command(name, help_text):
+        command_parser = subparsers.add_parser(
+            name,
+            add_help=False,
+            help=help_text,
+            description=help_text,
+        )
+        command_parser.add_argument("command_args", nargs=argparse.REMAINDER)
+        return command_parser
+
+    add_project_command("start", "Start the devcontainer for a project.")
+    add_project_command("compose", "Print a docker-compose.yaml for the devcontainer to stdout.")
+
+    add_simple_command("stop", "Stop the devcontainer.")
+    add_simple_command("restart", "Restart the devcontainer; fails if it does not exist.")
+    shell_parser = add_simple_command(
+        "shell",
+        "Open an interactive shell in the running devcontainer at a workspace directory.",
+    )
+    shell_parser.add_argument(
+        "directory",
+        nargs="?",
+        default=os.curdir,
+        help="Host directory under the workspace started by `start` (defaults to the current directory).",
+    )
+    add_simple_command("agent-serve", "Run the opencode server in the running devcontainer.")
+    add_simple_command("purge", "Delete the devcontainer. The shared /home/dev volume is kept.")
+
+    add_passthrough_command(
+        "exec",
+        "Run a command in the running devcontainer.",
+    )
+
+    agent_parser = add_passthrough_command(
+        "agent",
+        "Start opencode in the running devcontainer at a workspace directory.",
+    )
+    agent_parser.add_argument(
+        "-C",
+        "--directory",
+        dest="execution_dir",
+        metavar="DIRECTORY",
+        help="Host directory under the workspace started by `start`; defaults to the current directory.",
+    )
+
+    subparsers.add_parser(
+        "purge-all",
+        help="Delete all devcontainer containers and shared/legacy /home/dev volumes. The image is not deleted.",
+        description="Delete all devcontainer containers and shared/legacy /home/dev volumes. The image is not deleted.",
+    )
+
+    subparsers.add_parser(
+        "update",
+        help="Pull the devcontainer image.",
+        description="Pull the configured devcontainer image using the selected container CLI.",
+    )
+
+    subparsers.add_parser(
+        "help-env",
+        help="Show list of supported environment variables.",
+        description="Show list of supported environment variables, including DEVCONTAINER_AUTH_* forwarding variables.",
+    )
+
+    return parser
+
+
+def create_devcontainer(namespace, container_cli):
+    project_dir = ""
+    if hasattr(namespace, "project_directory"):
+        project_dir = project_path(namespace.project_directory)
+
+    command_args = getattr(namespace, "command_args", [])
+    execution_dir = getattr(namespace, "execution_dir", "")
+    if namespace.command == "shell":
+        execution_dir = namespace.directory
+    elif namespace.command == "agent" and not execution_dir:
+        command_args = list(command_args)
+        if command_args and command_args[0] != "--":
+            candidate = os.path.expanduser(command_args[0])
+            if candidate.startswith((".", os.path.sep, "~")):
+                execution_dir = command_args.pop(0)
+
+    return DevContainer(namespace.command, project_dir, command_args, container_cli, execution_dir)
+
+
+def dispatch(devcontainer):
+    if devcontainer.command == "restart":
+        devcontainer.restart_container()
+        return
+
+    handlers = {
+        "start": devcontainer.start_container,
+        "stop": devcontainer.stop_container,
+        "shell": devcontainer.shell_container,
+        "exec": devcontainer.exec_command,
+        "compose": devcontainer.compose_file,
+        "agent": devcontainer.agent,
+        "agent-serve": devcontainer.agent_serve,
+        "purge": devcontainer.purge_container,
+        "purge-all": devcontainer.purge_all,
+        "update": devcontainer.update_image,
+    }
+
+    try:
+        handler = handlers[devcontainer.command]
+    except KeyError as error:
+        raise ValueError(f"Unhandled command: {devcontainer.command}") from error
+
+    handler()
+
+
+def main(argv=None):
+    parser = build_parser()
+    namespace = parser.parse_args(argv)
+
+    if namespace.command == "help-env":
+        print(ENVIRONMENT_HELP.strip())
+        return 0
+
+    if namespace.command == "exec" and not namespace.command_args:
+        parser.error("exec requires <command> [argument ...]")
+
+    container_cli = None
+    if namespace.command != "compose":
+        container_cli = find_container_cli()
+        if not container_cli:
+            print(
+                "No container CLI found. Install wslc.exe, docker, or podman, or set CONTAINER_CLI.",
+                file=sys.stderr,
+            )
+            return 1
+
+    devcontainer = create_devcontainer(namespace, container_cli)
+
+    if namespace.command in {"start", "restart", "shell", "exec", "compose", "agent", "agent-serve"}:
+        devcontainer.configure_opencode_config_mount()
+
+    devcontainer.configure_agent_port()
+    devcontainer.configure_container_env_args()
+    dispatch(devcontainer)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+opencode_config_dir="${OPENCODE_CONFIG_DIR:-/opt/opencode-config}"
+
+case ":$PATH:" in
+    *":$opencode_config_dir/bin:"*) ;;
+    *) export PATH="$opencode_config_dir/bin:$PATH" ;;
+esac
+
+exec "$@"
