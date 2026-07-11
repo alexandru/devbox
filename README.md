@@ -1,8 +1,6 @@
-<img src="./misc/logo.svg" alt="Devbox" width="560">
+# Devbox
 
 A ready-to-use Linux container for agent-driven development.
-
-## What's included
 
 - Ubuntu 26.04
 - SDKMAN!
@@ -28,12 +26,6 @@ irm https://raw.githubusercontent.com/alexandru/devbox/main/install.ps1 | iex
 Requires Docker, Podman, or `wslc`.
 
 ```sh
-devbox start /path/to/project
-devbox shell
-```
-
-## Image
-
-```text
-ghcr.io/alexandru/devbox:latest
+devbox start ~/Projects
+devbox shell ~/Projects/path/to/project
 ```
