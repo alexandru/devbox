@@ -1,5 +1,7 @@
 # Devbox
 
+<img src="./misc/logo.svg" alt="Devbox logo" align="right" width="150" />
+
 A ready-to-use Linux container for agent-driven development.
 
 - Ubuntu 26.04
@@ -8,6 +10,8 @@ A ready-to-use Linux container for agent-driven development.
 - OpenCode
 
 ## Install
+
+[devbox](./bin/devbox) script is supported on Linux, MacOS and Windows.
 
 ### POSIX shells
 
@@ -23,9 +27,15 @@ irm https://raw.githubusercontent.com/alexandru/devbox/main/install.ps1 | iex
 
 ## Use
 
-Requires Docker, Podman, or `wslc`.
+Requires Docker, Podman, or [wslc](https://learn.microsoft.com/en-us/windows/wsl/wsl-container?tabs=csharp).
 
 ```sh
 devbox start ~/Projects
 devbox shell ~/Projects/path/to/project
+```
+
+For configuring the `devbox` script see the available env variables that it can use:
+
+```sh
+devbox help-env
 ```
