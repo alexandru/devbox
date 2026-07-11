@@ -1,6 +1,14 @@
 # Devbox
 
-Container image meant for agent-driven development in a Linux environment.
+<p align="center">
+  <img src="./misc/logo.svg" alt="Devbox" width="560">
+</p>
+
+<p align="center">
+  A ready-to-use Linux container for agent-driven development.
+</p>
+
+## What's included
 
 - Ubuntu 26.04
 - SDKMAN!
