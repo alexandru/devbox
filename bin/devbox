@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage the JVM build-tool devcontainer.
+"""Manage the JVM build-tool devbox.
 """
 
 import argparse
@@ -13,12 +13,12 @@ import subprocess
 import sys
 
 
-DEFAULT_IMAGE = "ghcr.io/alexandru/devcontainer:latest"
+DEFAULT_IMAGE = "ghcr.io/alexandru/devbox:latest"
 DEFAULT_AGENT_PORT = "10012"
-DEFAULT_HOME_VOLUME = "devcontainer-home"
-CONTAINER_NAME = "devcontainer"
-CONTAINER_LABEL = "com.alexandru.devcontainer=true"
-HOME_VOLUME_LABEL = "com.alexandru.devcontainer.home-volume"
+DEFAULT_HOME_VOLUME = "devbox-home"
+CONTAINER_NAME = "devbox"
+CONTAINER_LABEL = "com.alexandru.devbox=true"
+HOME_VOLUME_LABEL = "com.alexandru.devbox.home-volume"
 OPENCODE_CONFIG_CONTAINER_DIR = "/opt/opencode-config"
 WORKSPACE_LINK = "/workspace"
 EXEC_WORKDIR = "/workspace"
@@ -130,9 +130,9 @@ AUTH_ENV_NAMES = (
     "ZHIPU_API_KEY",
 )
 
-IMAGE = os.environ.get("DEVCONTAINER_IMAGE") or DEFAULT_IMAGE
-HOME_VOLUME_NAME = os.environ.get("DEVCONTAINER_HOME_VOLUME") or DEFAULT_HOME_VOLUME
-LEGACY_HOME_VOLUME_PREFIX = os.environ.get("DEVCONTAINER_HOME_VOLUME_PREFIX") or f"{HOME_VOLUME_NAME}-"
+IMAGE = os.environ.get("DEVBOX_IMAGE") or DEFAULT_IMAGE
+HOME_VOLUME_NAME = os.environ.get("DEVBOX_HOME_VOLUME") or DEFAULT_HOME_VOLUME
+LEGACY_HOME_VOLUME_PREFIX = os.environ.get("DEVBOX_HOME_VOLUME_PREFIX") or f"{HOME_VOLUME_NAME}-"
 
 def canonical_dir(path, description):
     if not os.path.isdir(path):
@@ -211,7 +211,7 @@ def yaml_quote(value):
 
 
 def auth_env_name(name):
-    return f"DEVCONTAINER_AUTH_{name}"
+    return f"DEVBOX_AUTH_{name}"
 
 
 def configured_auth_envs():
@@ -263,7 +263,7 @@ def ordered_add(values, value):
         values.append(value)
 
 
-class DevContainer:
+class DevBox:
     def __init__(self, command, project_dir="", command_args=None, container_cli=None, execution_dir=""):
         self.command = command
         self.project_dir = project_dir
@@ -328,7 +328,7 @@ class DevContainer:
         return objects[0] if objects else {}
 
     def configure_opencode_config_mount(self):
-        config_dir = os.environ.get("DEVCONTAINER_OPENCODE_CONFIG_DIR")
+        config_dir = os.environ.get("DEVBOX_OPENCODE_CONFIG_DIR")
         if config_dir:
             self.opencode_config_host_dir = opencode_config_path(config_dir)
 
@@ -342,7 +342,7 @@ class DevContainer:
             self.container_env_args.extend(["-e", f"OPENCODE_CONFIG_DIR={OPENCODE_CONFIG_CONTAINER_DIR}"])
 
     def configure_agent_port(self):
-        self.agent_port = os.environ.get("DEVCONTAINER_AGENT_PORT", "")
+        self.agent_port = os.environ.get("DEVBOX_AGENT_PORT", "")
         if self.command in {"start", "compose"} and not self.agent_port:
             self.agent_port = DEFAULT_AGENT_PORT
 
@@ -448,7 +448,7 @@ class DevContainer:
                 file=sys.stderr,
             )
             print(
-                f"Run `{sys.argv[0]} purge` and start it again to apply DEVCONTAINER_OPENCODE_CONFIG_DIR.",
+                f"Run `{sys.argv[0]} purge` and start it again to apply DEVBOX_OPENCODE_CONFIG_DIR.",
                 file=sys.stderr,
             )
             raise SystemExit(1)
@@ -465,7 +465,7 @@ class DevContainer:
             file=sys.stderr,
         )
         print(
-            f"Run `{sys.argv[0]} purge` and start it again to apply DEVCONTAINER_AGENT_PORT.",
+            f"Run `{sys.argv[0]} purge` and start it again to apply DEVBOX_AGENT_PORT.",
             file=sys.stderr,
         )
         raise SystemExit(1)
@@ -612,10 +612,10 @@ class DevContainer:
             "-e",
             f"TERM={os.environ.get('TERM') or 'xterm-256color'}",
             *self.container_env_args,
-            self.container_name,
-            "/usr/local/bin/devcontainer-entrypoint",
-            *args,
-        ]
+                self.container_name,
+            "/usr/local/bin/devbox-entrypoint",
+                *args,
+            ]
         os.execvp(self.container_cli, command)
 
     def stop_container(self):
@@ -657,8 +657,8 @@ class DevContainer:
 
     def compose_service(self):
         print("services:")
-        print("  devcontainer:")
-        print(f'    image: "${{DEVCONTAINER_IMAGE:-{DEFAULT_IMAGE}}}"')
+        print("  devbox:")
+        print(f'    image: "${{DEVBOX_IMAGE:-{DEFAULT_IMAGE}}}"')
         print(f"    container_name: {yaml_quote(self.container_name)}")
         print(f"    user: {yaml_quote(ROOT_USER)}")
         print(f"    working_dir: {yaml_quote(self.project_container_dir)}")
@@ -669,10 +669,10 @@ class DevContainer:
 
         if self.agent_port:
             print("    ports:")
-            print('      - "${DEVCONTAINER_AGENT_PORT}:10012"')
+            print('      - "${DEVBOX_AGENT_PORT}:10012"')
 
         print("    labels:")
-        print('      com.alexandru.devcontainer: "true"')
+        print('      com.alexandru.devbox: "true"')
         print(f"      {HOME_VOLUME_LABEL}: {yaml_quote(self.home_volume)}")
 
         self.compose_environment()
@@ -705,7 +705,7 @@ class DevContainer:
 
         if self.opencode_config_host_dir:
             print("      - type: bind")
-            print('        source: "${DEVCONTAINER_OPENCODE_CONFIG_DIR}"')
+            print('        source: "${DEVBOX_OPENCODE_CONFIG_DIR}"')
             print(f"        target: {yaml_quote(OPENCODE_CONFIG_CONTAINER_DIR)}")
 
         if has_ssh_auth_sock():
@@ -719,7 +719,7 @@ class DevContainer:
         print("  home:")
         print(f"    name: {yaml_quote(self.home_volume)}")
         print("    labels:")
-        print('      com.alexandru.devcontainer: "true"')
+        print('      com.alexandru.devbox: "true"')
 
     def purge_container(self):
         if self.container_exists():
@@ -786,7 +786,7 @@ class DevContainer:
 
         return []
 
-    def collect_devcontainer_volume_names(self, volume_names):
+    def collect_devbox_volume_names(self, volume_names):
         for volume_name in self.list_volume_names():
             if volume_name == HOME_VOLUME_NAME or volume_name.startswith(LEGACY_HOME_VOLUME_PREFIX):
                 ordered_add(volume_names, volume_name)
@@ -826,7 +826,7 @@ class DevContainer:
 
     def purge_volumes(self, volume_names):
         if not volume_names:
-            print("No devcontainer volumes found.")
+            print("No devbox volumes found.")
             return
 
         for volume_name in volume_names:
@@ -842,7 +842,7 @@ class DevContainer:
         for container_id in container_ids:
             self.collect_container_home_volumes(volume_names, container_id)
 
-        self.collect_devcontainer_volume_names(volume_names)
+        self.collect_devbox_volume_names(volume_names)
 
         if container_ids:
             self.run_cli(
@@ -850,9 +850,9 @@ class DevContainer:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            print(f"Deleted devcontainer containers: {len(container_ids)}")
+            print(f"Deleted devbox containers: {len(container_ids)}")
         else:
-            print("No devcontainer containers found.")
+            print("No devbox containers found.")
 
         self.purge_volumes(volume_names)
 
@@ -863,11 +863,11 @@ class DevContainer:
 ENVIRONMENT_HELP = f"""
 Environment:
   CONTAINER_CLI                     Container CLI to use. Defaults to first available wslc.exe, wslc, docker, or podman.
-  DEVCONTAINER_IMAGE                Image to run. Defaults to {IMAGE}.
-  DEVCONTAINER_AGENT_PORT           Host port for container port 10012; `start` defaults to {DEFAULT_AGENT_PORT}.
-  DEVCONTAINER_HOME_VOLUME          Shared /home/dev volume name. Defaults to {HOME_VOLUME_NAME}.
-  DEVCONTAINER_HOME_VOLUME_PREFIX   Legacy per-workspace /home/dev volume prefix removed by purge-all. Defaults to {LEGACY_HOME_VOLUME_PREFIX}.
-  DEVCONTAINER_OPENCODE_CONFIG_DIR  Optional host config directory mounted read-write; sets OPENCODE_CONFIG_DIR={OPENCODE_CONFIG_CONTAINER_DIR} inside the container.
+  DEVBOX_IMAGE                      Image to run. Defaults to {IMAGE}.
+  DEVBOX_AGENT_PORT                 Host port for container port 10012; `start` defaults to {DEFAULT_AGENT_PORT}.
+  DEVBOX_HOME_VOLUME                Shared /home/dev volume name. Defaults to {HOME_VOLUME_NAME}.
+  DEVBOX_HOME_VOLUME_PREFIX         Legacy per-workspace /home/dev volume prefix removed by purge-all. Defaults to {LEGACY_HOME_VOLUME_PREFIX}.
+  DEVBOX_OPENCODE_CONFIG_DIR        Optional host config directory mounted read-write; sets OPENCODE_CONFIG_DIR={OPENCODE_CONFIG_CONTAINER_DIR} inside the container.
 {auth_environment_help()}
 """
 
@@ -875,7 +875,7 @@ Environment:
 def build_parser():
     parser = argparse.ArgumentParser(
         prog=os.path.basename(sys.argv[0]),
-        description="Manage the JVM build-tool devcontainer.",
+        description="Manage the JVM build-tool devbox.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -897,14 +897,14 @@ def build_parser():
         command_parser.add_argument("command_args", nargs=argparse.REMAINDER)
         return command_parser
 
-    add_project_command("start", "Start the devcontainer for a project.")
-    add_project_command("compose", "Print a docker-compose.yaml for the devcontainer to stdout.")
+    add_project_command("start", "Start the devbox for a project.")
+    add_project_command("compose", "Print a docker-compose.yaml for the devbox to stdout.")
 
-    add_simple_command("stop", "Stop the devcontainer.")
-    add_simple_command("restart", "Restart the devcontainer; fails if it does not exist.")
+    add_simple_command("stop", "Stop the devbox.")
+    add_simple_command("restart", "Restart the devbox; fails if it does not exist.")
     shell_parser = add_simple_command(
         "shell",
-        "Open an interactive shell in the running devcontainer at a workspace directory.",
+        "Open an interactive shell in the running devbox at a workspace directory.",
     )
     shell_parser.add_argument(
         "directory",
@@ -912,17 +912,17 @@ def build_parser():
         default=os.curdir,
         help="Host directory under the workspace started by `start` (defaults to the current directory).",
     )
-    add_simple_command("agent-serve", "Run the opencode server in the running devcontainer.")
-    add_simple_command("purge", "Delete the devcontainer. The shared /home/dev volume is kept.")
+    add_simple_command("agent-serve", "Run the opencode server in the running devbox.")
+    add_simple_command("purge", "Delete the devbox. The shared /home/dev volume is kept.")
 
     add_passthrough_command(
         "exec",
-        "Run a command in the running devcontainer.",
+        "Run a command in the running devbox.",
     )
 
     agent_parser = add_passthrough_command(
         "agent",
-        "Start opencode in the running devcontainer at a workspace directory.",
+        "Start opencode in the running devbox at a workspace directory.",
     )
     agent_parser.add_argument(
         "-C",
@@ -934,26 +934,26 @@ def build_parser():
 
     subparsers.add_parser(
         "purge-all",
-        help="Delete all devcontainer containers and shared/legacy /home/dev volumes. The image is not deleted.",
-        description="Delete all devcontainer containers and shared/legacy /home/dev volumes. The image is not deleted.",
+        help="Delete all devbox containers and shared/legacy /home/dev volumes. The image is not deleted.",
+        description="Delete all devbox containers and shared/legacy /home/dev volumes. The image is not deleted.",
     )
 
     subparsers.add_parser(
         "update",
-        help="Pull the devcontainer image.",
-        description="Pull the configured devcontainer image using the selected container CLI.",
+        help="Pull the devbox image.",
+        description="Pull the configured devbox image using the selected container CLI.",
     )
 
     subparsers.add_parser(
         "help-env",
         help="Show list of supported environment variables.",
-        description="Show list of supported environment variables, including DEVCONTAINER_AUTH_* forwarding variables.",
+        description="Show list of supported environment variables, including DEVBOX_AUTH_* forwarding variables.",
     )
 
     return parser
 
 
-def create_devcontainer(namespace, container_cli):
+def create_devbox(namespace, container_cli):
     project_dir = ""
     if hasattr(namespace, "project_directory"):
         project_dir = project_path(namespace.project_directory)
@@ -969,31 +969,31 @@ def create_devcontainer(namespace, container_cli):
             if candidate.startswith((".", os.path.sep, "~")):
                 execution_dir = command_args.pop(0)
 
-    return DevContainer(namespace.command, project_dir, command_args, container_cli, execution_dir)
+    return DevBox(namespace.command, project_dir, command_args, container_cli, execution_dir)
 
 
-def dispatch(devcontainer):
-    if devcontainer.command == "restart":
-        devcontainer.restart_container()
+def dispatch(devbox):
+    if devbox.command == "restart":
+        devbox.restart_container()
         return
 
     handlers = {
-        "start": devcontainer.start_container,
-        "stop": devcontainer.stop_container,
-        "shell": devcontainer.shell_container,
-        "exec": devcontainer.exec_command,
-        "compose": devcontainer.compose_file,
-        "agent": devcontainer.agent,
-        "agent-serve": devcontainer.agent_serve,
-        "purge": devcontainer.purge_container,
-        "purge-all": devcontainer.purge_all,
-        "update": devcontainer.update_image,
+        "start": devbox.start_container,
+        "stop": devbox.stop_container,
+        "shell": devbox.shell_container,
+        "exec": devbox.exec_command,
+        "compose": devbox.compose_file,
+        "agent": devbox.agent,
+        "agent-serve": devbox.agent_serve,
+        "purge": devbox.purge_container,
+        "purge-all": devbox.purge_all,
+        "update": devbox.update_image,
     }
 
     try:
-        handler = handlers[devcontainer.command]
+        handler = handlers[devbox.command]
     except KeyError as error:
-        raise ValueError(f"Unhandled command: {devcontainer.command}") from error
+        raise ValueError(f"Unhandled command: {devbox.command}") from error
 
     handler()
 
@@ -1019,14 +1019,14 @@ def main(argv=None):
             )
             return 1
 
-    devcontainer = create_devcontainer(namespace, container_cli)
+    devbox = create_devbox(namespace, container_cli)
 
     if namespace.command in {"start", "restart", "shell", "exec", "compose", "agent", "agent-serve"}:
-        devcontainer.configure_opencode_config_mount()
+        devbox.configure_opencode_config_mount()
 
-    devcontainer.configure_agent_port()
-    devcontainer.configure_container_env_args()
-    dispatch(devcontainer)
+    devbox.configure_agent_port()
+    devbox.configure_container_env_args()
+    dispatch(devbox)
     return 0
 
 

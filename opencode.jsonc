@@ -3,7 +3,7 @@
   "references": {
     "docs": {
       "path": "../docker-images",
-      "description": "Original project (used for extraction of devcontainer)",
+      "description": "Original project (used for extraction of devbox)",
     },
   },
 }

@@ -5,8 +5,8 @@ on:
     - cron: '0 0 * * 0'
 
 jobs:
-  push-devcontainer:
-    name: devcontainer (${{ matrix.platform }})
+  push-devbox:
+    name: devbox (${{ matrix.platform }})
     strategy:
       matrix:
         include:
@@ -34,11 +34,11 @@ jobs:
 
       - name: Build and push Docker image
         run: |
-          make push-devcontainer-platform PLATFORM=${{ matrix.platform }}
+          make push-devbox-platform PLATFORM=${{ matrix.platform }}
 
-  push-devcontainer-manifest:
-    name: devcontainer manifest
-    needs: push-devcontainer
+  push-devbox-manifest:
+    name: devbox manifest
+    needs: push-devbox
     runs-on: ubuntu-24.04
     permissions:
       packages: write
@@ -59,4 +59,4 @@ jobs:
 
       - name: Create and push multi-platform manifest
         run: |
-          make push-devcontainer-manifest
+          make push-devbox-manifest

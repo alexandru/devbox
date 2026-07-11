@@ -1,0 +1,52 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+jobs:
+  posix-tests:
+    name: POSIX (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash tests/test-devbox.sh
+      - run: sh tests/test-install.sh
+      - run: sh -n install.sh && bash -n install.sh
+      - name: Install from checkout
+        run: |
+          temp_home="$(mktemp -d)"
+          HOME="$temp_home" DEVBOX_SOURCE_FILE="$GITHUB_WORKSPACE/bin/devbox" DEVBOX_FORCE=1 sh install.sh
+          "$temp_home/bin/devbox" --help
+          "$temp_home/bin/devbox" help-env
+
+  windows-tests:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - shell: pwsh
+        run: ./tests/test-install.ps1
+      - shell: pwsh
+        run: |
+          $env:DEVBOX_SOURCE_FILE = "$env:GITHUB_WORKSPACE/bin/devbox"
+          $env:DEVBOX_INSTALL_DIR = Join-Path $env:RUNNER_TEMP 'devbox/bin'
+          $env:DEVBOX_FORCE = '1'
+          & ./install.ps1
+          & (Join-Path $env:DEVBOX_INSTALL_DIR 'devbox.cmd') --help
+
+  static-validation:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify executable files
+        run: test -x bin/devbox && test -x bin/devbox-entrypoint && test -x bin/osc52-clipboard
+      - name: Compile CLI
+        run: PYTHONPYCACHEPREFIX="$(mktemp -d)" python3 -m py_compile bin/devbox
+      - name: Verify Make targets
+        run: make -n build-devbox && make -n push-devbox-manifest
+      - name: Check renamed contract
+        run: bash tests/test-devbox.sh

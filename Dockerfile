@@ -73,9 +73,9 @@ RUN if getent group "$USER_GID" >/dev/null; then \
 ENV HOME=/home/dev
 ENV PATH="/opt/opencode-config/bin:/usr/local/bin:${PATH}"
 
-COPY bin/devcontainer-entrypoint /usr/local/bin/devcontainer-entrypoint
+COPY bin/devbox-entrypoint /usr/local/bin/devbox-entrypoint
 COPY bin/osc52-clipboard /usr/local/bin/osc52-clipboard
-RUN chmod 0755 /usr/local/bin/devcontainer-entrypoint /usr/local/bin/osc52-clipboard && \
+RUN chmod 0755 /usr/local/bin/devbox-entrypoint /usr/local/bin/osc52-clipboard && \
     ln -sf /usr/local/bin/osc52-clipboard /usr/local/bin/wl-copy && \
     ln -sf /usr/local/bin/osc52-clipboard /usr/local/bin/xclip && \
     ln -sf /usr/local/bin/osc52-clipboard /usr/local/bin/xsel && \
@@ -87,5 +87,5 @@ USER dev
 WORKDIR /home/dev
 VOLUME ["/home/dev"]
 EXPOSE 10012
-ENTRYPOINT ["/usr/local/bin/devcontainer-entrypoint"]
+ENTRYPOINT ["/usr/local/bin/devbox-entrypoint"]
 CMD ["bash"]
