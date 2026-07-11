@@ -1,12 +1,6 @@
-# Devbox
+<img src="./misc/logo.svg" alt="Devbox" width="560">
 
-<p align="center">
-  <img src="./misc/logo.svg" alt="Devbox" width="560">
-</p>
-
-<p align="center">
-  A ready-to-use Linux container for agent-driven development.
-</p>
+A ready-to-use Linux container for agent-driven development.
 
 ## What's included
 
