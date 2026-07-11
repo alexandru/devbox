@@ -1,52 +1,39 @@
 # Devbox
 
-A standalone helper and image for a JVM build-tools development container.
+Container image meant for agent-driven development in a Linux environment.
+
+## Image contents
+
+- Ubuntu 26.04
+- SDKMAN!
+- Node.js 24
+- OpenCode
 
 ## Install
 
+### POSIX shells
+
 ```sh
-curl -fsSL https://raw.githubusercontent.com/alexandru/devbox/main/install.sh | sh && export PATH="$HOME/bin:$PATH"
+curl -fsSL https://raw.githubusercontent.com/alexandru/devbox/main/install.sh | sh
 ```
 
-```fish
-curl -fsSL https://raw.githubusercontent.com/alexandru/devbox/main/install.sh | sh; and fish_add_path "$HOME/bin"
-```
+### PowerShell
 
 ```powershell
 irm https://raw.githubusercontent.com/alexandru/devbox/main/install.ps1 | iex
 ```
 
-The installers require Python 3.9+. They use Homebrew, apt, dnf, yum, pacman,
-apk, or zypper on POSIX, and winget, Chocolatey, or Scoop on Windows to install
-it when needed. A sudo or UAC prompt may be required. Rerun an installer to
-upgrade. POSIX installs to `~/bin`; Windows installs to
-`%LOCALAPPDATA%\Programs\devbox\bin`; both persist that location in your PATH.
-
-`devbox` is also used by another development-environment tool. The installers
-refuse to overwrite or shadow another `devbox` command unless `DEVBOX_FORCE=1`
-is explicitly set.
-
 ## Use
 
-Install Docker, Podman, or `wslc` separately, then run:
+Requires Docker, Podman, or `wslc`.
 
 ```sh
 devbox start /path/to/project
 devbox shell
 ```
 
-Use `devbox --help` for commands and `devbox help-env` for the canonical list
-of `DEVBOX_*` image, volume, agent, OpenCode configuration, and authentication
-variables. The breaking rename does not discover old containers or volumes.
+## Image
 
-The default image is
-`ghcr.io/alexandru/devbox:latest`.
-
-## Build and publish
-
-```sh
-make build-devbox
+```text
+ghcr.io/alexandru/devbox:latest
 ```
-
-GitHub Actions publishes amd64 and arm64 images to GHCR weekly and on manual
-dispatch, then creates the `latest` multi-platform manifest.
