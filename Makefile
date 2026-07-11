@@ -5,6 +5,10 @@ PLATFORM ?= linux/amd64
 PLATFORM_TAG = $(subst /,-,${PLATFORM})
 DEVBOX_PLATFORM_TAG = ${DEVBOX_IMAGE}:${PLATFORM_TAG}
 
+.PHONY: test
+test:
+	python3 -m unittest discover -s tests -v
+
 check-container-cli:
 	@test -n "${CONTAINER_CLI}" || (echo "No container CLI found. Install wslc.exe, docker, or podman, or set CONTAINER_CLI=/path/to/cli." >&2; exit 1)
 

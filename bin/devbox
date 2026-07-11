@@ -623,6 +623,9 @@ class DevBox:
             "/usr/local/bin/devbox-entrypoint",
                 *args,
             ]
+        if os.name == "nt":
+            result = subprocess.run(command, check=False)
+            raise SystemExit(result.returncode)
         os.execvp(self.container_cli, command)
 
     def stop_container(self):
