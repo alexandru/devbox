@@ -435,6 +435,8 @@ class DevBox:
         relative_path = os.path.relpath(requested_dir, host_mount_dir)
         if relative_path == ".":
             return container_mount_dir
+        if os.name == "nt":
+            relative_path = relative_path.replace("\\", "/")
         return posixpath.normpath(posixpath.join(container_mount_dir, relative_path))
 
     def container_agent_ports(self):

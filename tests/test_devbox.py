@@ -130,6 +130,48 @@ class InspectTest(unittest.TestCase):
 
         self.assertIn("outside the started workspace", stderr.getvalue())
 
+    def test_container_directory_converts_windows_relative_separators(self):
+        instance = new_devbox()
+        globals_ = instance.container_directory.__globals__
+
+        with mock.patch.object(
+            instance,
+            "container_workspace_mount",
+            return_value=(r"C:\Users\alex", "/c/Users/alex"),
+        ), mock.patch.dict(
+            globals_,
+            {
+                "canonical_dir": lambda _path, _description: r"C:\Users\alex\Developer\monix",
+                "path_is_within": lambda _path, _parent: True,
+            },
+        ), mock.patch.object(globals_["os"], "name", "nt"), mock.patch.object(
+            globals_["os"].path, "relpath", return_value=r"Developer\monix"
+        ):
+            container_directory = instance.container_directory(r"C:\Users\alex\Developer\monix")
+
+        self.assertEqual(container_directory, "/c/Users/alex/Developer/monix")
+
+    def test_container_directory_preserves_backslashes_in_posix_filename(self):
+        instance = new_devbox()
+        globals_ = instance.container_directory.__globals__
+
+        with mock.patch.object(
+            instance,
+            "container_workspace_mount",
+            return_value=("/home/alex", "/home/alex"),
+        ), mock.patch.dict(
+            globals_,
+            {
+                "canonical_dir": lambda _path, _description: "/home/alex/project\\name",
+                "path_is_within": lambda _path, _parent: True,
+            },
+        ), mock.patch.object(globals_["os"], "name", "posix"), mock.patch.object(
+            globals_["os"].path, "relpath", return_value="project\\name"
+        ):
+            container_directory = instance.container_directory("/home/alex/project\\name")
+
+        self.assertEqual(container_directory, "/home/alex/project\\name")
+
 
 class ConfigurationTest(unittest.TestCase):
     def test_start_and_compose_use_default_agent_port(self):
