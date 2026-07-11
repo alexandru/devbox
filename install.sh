@@ -99,16 +99,9 @@ persist_home_bin_path() {
   startup_file=$(select_shell_startup_file)
   mkdir -p "$(dirname "$startup_file")"
   touch "$startup_file"
-  if ! grep -F '# >>> devbox installer >>>' "$startup_file" >/dev/null 2>&1; then
+  if ! grep -Fx 'export PATH="$HOME/bin:$PATH"' "$startup_file" >/dev/null 2>&1; then
     [ -s "$startup_file" ] && printf '\n' >> "$startup_file"
-    cat >> "$startup_file" <<'EOF'
-# >>> devbox installer >>>
-case ":$PATH:" in
-  *":$HOME/bin:"*) ;;
-  *) export PATH="$HOME/bin:$PATH" ;;
-esac
-# <<< devbox installer <<<
-EOF
+    printf '%s\n' 'export PATH="$HOME/bin:$PATH"' >> "$startup_file"
     log "updated $startup_file"
   fi
 }

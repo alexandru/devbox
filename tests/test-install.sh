@@ -16,8 +16,15 @@ SHELL=/bin/sh
 PATH=/usr/bin:/bin
 export HOME SHELL PATH
 persist_home_bin_path
-grep -F '# >>> devbox installer >>>' "$HOME/.profile"
+grep -Fx 'export PATH="$HOME/bin:$PATH"' "$HOME/.profile"
+! grep -F '>>> devbox installer >>>' "$HOME/.profile"
 persist_home_bin_path
-[ "$(grep -c '# >>> devbox installer >>>' "$HOME/.profile")" -eq 1 ]
+[ "$(grep -c '^export PATH="\$HOME/bin:\$PATH"$' "$HOME/.profile")" -eq 1 ]
+
+rm -f "$HOME/.profile"
+PATH="$HOME/bin:/usr/bin:/bin"
+export PATH
+persist_home_bin_path
+[ ! -e "$HOME/.profile" ]
 
 printf 'POSIX installer tests passed\n'
