@@ -2,11 +2,9 @@
 
 Container image meant for agent-driven development in a Linux environment.
 
-## Image contents
-
 - Ubuntu 26.04
 - SDKMAN!
-- Node.js 24
+- Node.js
 - OpenCode
 
 ## Install
