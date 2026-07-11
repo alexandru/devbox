@@ -205,6 +205,13 @@ def normalize_container_path(path):
     return path
 
 
+def container_path(path):
+    if len(path) >= 3 and path[0].isalpha() and path[1] == ":" and path[2] in {"\\", "/"}:
+        suffix = path[2:].replace("\\", "/")
+        return f"/{path[0].lower()}{suffix}"
+    return path
+
+
 def yaml_quote(value):
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
@@ -268,8 +275,8 @@ class DevBox:
         self.command = command
         self.project_dir = project_dir
         self.project_mount_dir = project_mount_path(project_dir) if project_dir else ""
-        self.project_container_dir = project_dir
-        self.project_container_mount_dir = self.project_mount_dir
+        self.project_container_dir = container_path(project_dir)
+        self.project_container_mount_dir = container_path(self.project_mount_dir)
         self.command_args = list(command_args or [])
         self.execution_dir = execution_dir
         self.container_cli = container_cli or ""
