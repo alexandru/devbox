@@ -11,6 +11,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 
 
 DEFAULT_IMAGE = "ghcr.io/alexandru/devbox:latest"
@@ -463,8 +464,8 @@ class DevBox:
             relative_path = relative_path.replace("\\", "/")
         return posixpath.normpath(posixpath.join(container_mount_dir, relative_path))
 
-    def container_agent_ports(self):
-        container = self.inspect_object(self.container_name)
+    def container_agent_ports(self, container=None):
+        container = container or self.inspect_object(self.container_name)
         bindings = container.get("HostConfig", {}).get("PortBindings", {}).get("10012/tcp") or []
         if not bindings:
             bindings = container.get("Ports", {}).get("10012/tcp") or []
@@ -628,6 +629,91 @@ class DevBox:
             return []
 
         return ["-p", f"{self.agent_port}:10012"]
+
+    def container_wireguard_status(self):
+        result = self.run_cli(
+            ["exec", "-u", ROOT_USER, self.container_name, "wg", "show", "devbox", "latest-handshakes"],
+            capture=True,
+        )
+        if result.returncode != 0:
+            return "interface unavailable"
+
+        handshakes = []
+        for line in result.stdout.splitlines():
+            fields = line.split()
+            if len(fields) >= 2 and fields[-1].isdigit():
+                handshakes.append(int(fields[-1]))
+        latest = max(handshakes, default=0)
+        if latest <= 0:
+            return "active; no handshake yet"
+
+        age = max(0, int(time.time()) - latest)
+        return f"active; latest handshake {age} seconds ago"
+
+    def status_container(self):
+        print(f"Runtime:   {os.path.basename(self.container_cli)}")
+        print(f"Container: {self.container_name}")
+        container = self.container_inspect()
+        if not container:
+            print("Status:    not created")
+            return
+
+        state = container.get("State", {})
+        running = self.container_running_state(container)
+        status = state.get("Status") or ("running" if running else "stopped")
+        if not running and state.get("ExitCode") is not None:
+            status += f" (exit code {state['ExitCode']})"
+        print(f"Status:    {status}")
+
+        config = container.get("Config", {})
+        if config.get("Image"):
+            print(f"Image:     {config['Image']}")
+        if container.get("Id"):
+            print(f"ID:        {container['Id'][:12]}")
+        if container.get("Created"):
+            print(f"Created:   {container['Created']}")
+        if state.get("StartedAt"):
+            print(f"Started:   {state['StartedAt']}")
+        if not running and state.get("FinishedAt"):
+            print(f"Finished:  {state['FinishedAt']}")
+        if config.get("WorkingDir"):
+            print(f"Workdir:   {config['WorkingDir']}")
+
+        mounts = container.get("Mounts", [])
+        if mounts:
+            print("Mounts:")
+            for mount in mounts:
+                source = normalize_container_path(mount.get("Source", "")) or mount.get("Name", "")
+                destination = mount.get("Destination", "")
+                if source and destination:
+                    mode = "rw" if mount.get("RW", True) else "ro"
+                    print(f"  {source} -> {destination} ({mode})")
+
+        ports = self.container_agent_ports(container)
+        if ports:
+            print(f"Agent:     localhost:{ports[0]} -> 10012/tcp")
+        else:
+            print("Agent:     not published")
+
+        wireguard_mount = next(
+            (mount for mount in mounts if mount.get("Destination") == WIREGUARD_CONFIG_CONTAINER_PATH),
+            None,
+        )
+        if not wireguard_mount:
+            print("WireGuard: disabled")
+            return
+
+        wireguard_source = normalize_container_path(wireguard_mount.get("Source", ""))
+        mtu = next(
+            (
+                value.split("=", 1)[1]
+                for value in config.get("Env", [])
+                if value.startswith("DEVBOX_WIREGUARD_MTU=")
+            ),
+            "unknown",
+        )
+        print(f"WireGuard: enabled; config={wireguard_source}; MTU={mtu}")
+        print(f"Tunnel:    {self.container_wireguard_status() if running else 'container not running'}")
 
     def wireguard_args(self):
         if not self.wireguard_config_host_path:
@@ -1025,6 +1111,7 @@ def build_parser():
     add_project_command("compose", "Print a docker-compose.yaml for the devbox to stdout.")
 
     add_simple_command("stop", "Stop the devbox.")
+    add_simple_command("status", "Show devbox container and runtime status.")
     add_simple_command("restart", "Restart the devbox; fails if it does not exist.")
     shell_parser = add_simple_command(
         "shell",
@@ -1104,6 +1191,7 @@ def dispatch(devbox):
     handlers = {
         "start": devbox.start_container,
         "stop": devbox.stop_container,
+        "status": devbox.status_container,
         "shell": devbox.shell_container,
         "exec": devbox.exec_command,
         "compose": devbox.compose_file,

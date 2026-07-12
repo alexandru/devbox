@@ -310,7 +310,80 @@ class ContainerExecutionTest(unittest.TestCase):
         execvp.assert_not_called()
 
 
+class StatusTest(unittest.TestCase):
+    def test_status_reports_missing_container(self):
+        instance = new_devbox("status", container_cli="wslc.exe")
+
+        with mock.patch.object(instance, "container_inspect", return_value={}), mock.patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout:
+            instance.status_container()
+
+        self.assertIn("Runtime:   wslc.exe", stdout.getvalue())
+        self.assertIn("Status:    not created", stdout.getvalue())
+
+    def test_status_reports_running_container_runtime_configuration(self):
+        instance = new_devbox("status", container_cli="podman")
+        container = {
+            "Id": "abcdef1234567890",
+            "Created": "2026-07-12T10:00:00Z",
+            "Config": {
+                "Image": "devbox:test",
+                "WorkingDir": "/workspace/project",
+                "Env": ["DEVBOX_WIREGUARD_MTU=1420", "SECRET=hidden"],
+            },
+            "State": {"Running": True, "Status": "running", "StartedAt": "2026-07-12T10:00:01Z"},
+            "Mounts": [
+                {"Source": "/host/project", "Destination": "/workspace/project", "RW": True},
+                {"Name": "devbox-home", "Destination": "/home/dev", "RW": True},
+                {"Source": "/host/wg.conf", "Destination": "/etc/wireguard/devbox.conf", "RW": False},
+            ],
+            "HostConfig": {"PortBindings": {"10012/tcp": [{"HostPort": "10012"}]}},
+        }
+
+        with mock.patch.object(instance, "container_inspect", return_value=container), mock.patch.object(
+            instance, "container_wireguard_status", return_value="active; latest handshake 30 seconds ago"
+        ), mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            instance.status_container()
+
+        output = stdout.getvalue()
+        for expected in (
+            "Runtime:   podman",
+            "Status:    running",
+            "Image:     devbox:test",
+            "ID:        abcdef123456",
+            "Workdir:   /workspace/project",
+            "/host/project -> /workspace/project (rw)",
+            "devbox-home -> /home/dev (rw)",
+            "Agent:     localhost:10012 -> 10012/tcp",
+            "WireGuard: enabled; config=/host/wg.conf; MTU=1420",
+            "Tunnel:    active; latest handshake 30 seconds ago",
+        ):
+            self.assertIn(expected, output)
+        self.assertNotIn("SECRET", output)
+
+    def test_status_reports_exit_details(self):
+        instance = new_devbox("status", container_cli="podman")
+        container = {
+            "Config": {"Image": "devbox:test", "WorkingDir": "/workspace"},
+            "State": {"Running": False, "Status": "exited", "ExitCode": 127, "FinishedAt": "today"},
+        }
+
+        with mock.patch.object(instance, "container_inspect", return_value=container), mock.patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout:
+            instance.status_container()
+
+        self.assertIn("Status:    exited (exit code 127)", stdout.getvalue())
+        self.assertIn("Finished:  today", stdout.getvalue())
+
+
 class ParserTest(unittest.TestCase):
+    def test_status_parses_without_arguments(self):
+        namespace = DEVBOX["build_parser"]().parse_args(["status"])
+
+        self.assertEqual(namespace.command, "status")
+
     def test_start_requires_and_parses_project_directory(self):
         namespace = DEVBOX["build_parser"]().parse_args(["start", "."])
 
