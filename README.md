@@ -30,7 +30,11 @@ irm https://raw.githubusercontent.com/alexandru/devbox/main/install.ps1 | iex
 Requires Docker, Podman, or [wslc](https://learn.microsoft.com/en-us/windows/wsl/tutorials/wsl-containers?source=recommendations).
 
 ```sh
+# Starts the container, mounting ~/Projects in it
+# (this being the "workspace" that contains projects of interest)
 devbox start ~/Projects
+
+# Opens a shell that chdirs straight in a desired project's path
 devbox shell ~/Projects/path/to/project
 ```
 
