@@ -768,8 +768,15 @@ class DevBox:
             "exec sleep infinity"
         )
         if self.wireguard_enabled():
+            config_command = ""
+            if self.wireguard_config_str:
+                config_command = (
+                    f"install -d -m 700 {posixpath.dirname(WIREGUARD_CONFIG_CONTAINER_PATH)} && "
+                    f"printf '%s' \"$DEVBOX_WIREGUARD_CONFIG_STR\" > {WIREGUARD_CONFIG_CONTAINER_PATH} && "
+                    f"chmod 600 {WIREGUARD_CONFIG_CONTAINER_PATH} && "
+                )
             return (
-                f"wg-quick up {WIREGUARD_CONFIG_CONTAINER_PATH} && "
+                f"{config_command}wg-quick up {WIREGUARD_CONFIG_CONTAINER_PATH} && "
                 f"ip link set dev devbox mtu {self.wireguard_mtu} && {command}"
             )
         return command

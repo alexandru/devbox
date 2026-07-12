@@ -259,7 +259,9 @@ class ConfigurationTest(unittest.TestCase):
                 "DEVBOX_WIREGUARD_MTU=1420",
             ],
         )
-        self.assertIn("wg-quick up /etc/wireguard/devbox.conf", instance.workspace_link_command())
+        command = instance.workspace_link_command()
+        self.assertIn('printf \'%s\' "$DEVBOX_WIREGUARD_CONFIG_STR" > /etc/wireguard/devbox.conf', command)
+        self.assertLess(command.index("printf"), command.index("wg-quick"))
 
     def test_wireguard_rejects_path_and_string_configuration_together(self):
         instance = new_devbox(container_cli="podman")
