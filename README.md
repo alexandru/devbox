@@ -2,7 +2,7 @@
 
 <img src="./misc/logo.svg" alt="Devbox logo" align="right" width="150" />
 
-A ready-to-use Linux container for agent-driven development.
+A ready-to-use Linux container for agent-driven development, with a launcher provided for efficient setup and interactions with the container.
 
 - Ubuntu 26.04
 - SDKMAN!
@@ -27,7 +27,7 @@ irm https://raw.githubusercontent.com/alexandru/devbox/main/install.ps1 | iex
 
 ## Use
 
-Requires Docker, Podman, or [wslc](https://learn.microsoft.com/en-us/windows/wsl/wsl-container?tabs=csharp).
+Requires Docker, Podman, or [wslc](https://learn.microsoft.com/en-us/windows/wsl/tutorials/wsl-containers?source=recommendations).
 
 ```sh
 devbox start ~/Projects
