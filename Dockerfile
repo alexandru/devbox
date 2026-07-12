@@ -22,6 +22,7 @@ RUN apt-get update && \
         gnupg \
         less \
         make \
+        neovim \
         openssh-client \
         patch \
         procps \
