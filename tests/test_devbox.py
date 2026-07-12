@@ -211,7 +211,7 @@ class ConfigurationTest(unittest.TestCase):
         instance = new_devbox(container_cli="podman")
         globals_ = instance.configure_wireguard.__globals__
 
-        with mock.patch.dict(os.environ, {"DEVBOX_WIREGUARD_CONFIG": "~/wg.conf"}, clear=True), mock.patch.dict(
+        with mock.patch.dict(os.environ, {"DEVBOX_WIREGUARD_CONFIG_PATH": "~/wg.conf"}, clear=True), mock.patch.dict(
             globals_, {"canonical_file": lambda _path, _description: "/home/alex/wg.conf"}
         ):
             instance.configure_wireguard()
@@ -237,13 +237,51 @@ class ConfigurationTest(unittest.TestCase):
             )
         )
 
+    def test_wireguard_string_configuration_is_forwarded_without_mount(self):
+        instance = new_devbox(container_cli="podman")
+        config = "[Interface]\nPrivateKey = secret\n"
+
+        with mock.patch.dict(os.environ, {"DEVBOX_WIREGUARD_CONFIG_STR": config}, clear=True):
+            instance.configure_wireguard()
+
+        self.assertEqual(instance.wireguard_config_str, config)
+        self.assertNotIn("-v", instance.wireguard_args())
+        self.assertEqual(
+            instance.wireguard_args(),
+            [
+                "--cap-add",
+                "NET_ADMIN",
+                "--sysctl",
+                "net.ipv4.conf.all.src_valid_mark=1",
+                "-e",
+                f"DEVBOX_WIREGUARD_CONFIG_STR={config}",
+                "-e",
+                "DEVBOX_WIREGUARD_MTU=1420",
+            ],
+        )
+        self.assertIn("wg-quick up /etc/wireguard/devbox.conf", instance.workspace_link_command())
+
+    def test_wireguard_rejects_path_and_string_configuration_together(self):
+        instance = new_devbox(container_cli="podman")
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "DEVBOX_WIREGUARD_CONFIG_PATH": "/wg.conf",
+                "DEVBOX_WIREGUARD_CONFIG_STR": "[Interface]",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(SystemExit, "DEVBOX_WIREGUARD_CONFIG_PATH.*DEVBOX_WIREGUARD_CONFIG_STR"):
+                instance.configure_wireguard()
+
     def test_wireguard_rejects_invalid_mtu(self):
         instance = new_devbox(container_cli="podman")
         globals_ = instance.configure_wireguard.__globals__
 
         with mock.patch.dict(
             os.environ,
-            {"DEVBOX_WIREGUARD_CONFIG": "/wg.conf", "DEVBOX_WIREGUARD_MTU": "huge"},
+            {"DEVBOX_WIREGUARD_CONFIG_PATH": "/wg.conf", "DEVBOX_WIREGUARD_MTU": "huge"},
             clear=True,
         ), mock.patch.dict(globals_, {"canonical_file": lambda _path, _description: "/wg.conf"}):
             with self.assertRaisesRegex(SystemExit, "DEVBOX_WIREGUARD_MTU"):
@@ -253,7 +291,7 @@ class ConfigurationTest(unittest.TestCase):
         instance = new_devbox(container_cli="wslc.exe")
         globals_ = instance.configure_wireguard.__globals__
 
-        with mock.patch.dict(os.environ, {"DEVBOX_WIREGUARD_CONFIG": "/wg.conf"}, clear=True), mock.patch.dict(
+        with mock.patch.dict(os.environ, {"DEVBOX_WIREGUARD_CONFIG_PATH": "/wg.conf"}, clear=True), mock.patch.dict(
             globals_, {"canonical_file": lambda _path, _description: "/wg.conf"}
         ):
             with self.assertRaisesRegex(SystemExit, "wslc.*NET_ADMIN"):
@@ -262,9 +300,17 @@ class ConfigurationTest(unittest.TestCase):
     def test_help_env_documents_optional_wireguard_configuration(self):
         help_text = DEVBOX["ENVIRONMENT_HELP"]
 
-        self.assertIn("DEVBOX_WIREGUARD_CONFIG", help_text)
+        self.assertIn("DEVBOX_WIREGUARD_CONFIG_PATH", help_text)
+        self.assertIn("DEVBOX_WIREGUARD_CONFIG_STR", help_text)
+        self.assertNotIn("DEVBOX_WIREGUARD_CONFIG ", help_text)
         self.assertIn("DEVBOX_WIREGUARD_MTU", help_text)
         self.assertIn("optional", help_text.lower())
+
+    def test_entrypoint_writes_wireguard_string_configuration(self):
+        entrypoint = (Path(__file__).parents[1] / "bin" / "devbox-entrypoint").read_text()
+
+        self.assertIn('printf \'%s\' "$DEVBOX_WIREGUARD_CONFIG_STR"', entrypoint)
+        self.assertIn("/etc/wireguard/devbox.conf", entrypoint)
 
 
 class ContainerExecutionTest(unittest.TestCase):
