@@ -17,8 +17,8 @@ DEFAULT_IMAGE = "ghcr.io/alexandru/devbox:latest"
 DEFAULT_AGENT_PORT = "10012"
 DEFAULT_HOME_VOLUME = "devbox-home"
 CONTAINER_NAME = "devbox"
-CONTAINER_LABEL = "com.alexandru.devbox=true"
-HOME_VOLUME_LABEL = "com.alexandru.devbox.home-volume"
+CONTAINER_LABEL = "org.alexn.devbox=true"
+HOME_VOLUME_LABEL = "org.alexn.devbox.home-volume"
 OPENCODE_CONFIG_CONTAINER_DIR = "/opt/opencode-config"
 WORKSPACE_LINK = "/workspace"
 EXEC_WORKDIR = "/workspace"
@@ -133,10 +133,19 @@ AUTH_ENV_NAMES = (
 IMAGE = os.environ.get("DEVBOX_IMAGE") or DEFAULT_IMAGE
 HOME_VOLUME_NAME = os.environ.get("DEVBOX_HOME_VOLUME") or DEFAULT_HOME_VOLUME
 LEGACY_HOME_VOLUME_PREFIX = os.environ.get("DEVBOX_HOME_VOLUME_PREFIX") or f"{HOME_VOLUME_NAME}-"
+WIREGUARD_CONFIG_CONTAINER_PATH = "/etc/wireguard/devbox.conf"
 
 def canonical_dir(path, description):
     if not os.path.isdir(path):
         print(f"{description} directory does not exist: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    return os.path.realpath(path)
+
+
+def canonical_file(path, description):
+    path = os.path.expanduser(path)
+    if not os.path.isfile(path):
+        print(f"{description} file does not exist: {path}", file=sys.stderr)
         raise SystemExit(1)
     return os.path.realpath(path)
 
@@ -285,6 +294,8 @@ class DevBox:
         self.opencode_config_host_dir = ""
         self.agent_port = ""
         self.container_env_args = []
+        self.wireguard_config_host_path = ""
+        self.wireguard_mtu = ""
 
     def uses_wslc(self):
         return is_wslc_cli(self.container_cli)
@@ -338,6 +349,19 @@ class DevBox:
         config_dir = os.environ.get("DEVBOX_OPENCODE_CONFIG_DIR")
         if config_dir:
             self.opencode_config_host_dir = opencode_config_path(config_dir)
+
+    def configure_wireguard(self):
+        config_path = os.environ.get("DEVBOX_WIREGUARD_CONFIG", "")
+        if config_path:
+            if self.uses_wslc():
+                raise SystemExit(
+                    "WireGuard is not supported by wslc because wslc cannot grant the required "
+                    "NET_ADMIN capability. Set CONTAINER_CLI=podman or CONTAINER_CLI=docker."
+                )
+            self.wireguard_config_host_path = canonical_file(config_path, "WireGuard config")
+            self.wireguard_mtu = os.environ.get("DEVBOX_WIREGUARD_MTU", "1420")
+            if not self.wireguard_mtu.isdigit() or not 576 <= int(self.wireguard_mtu) <= 9000:
+                raise SystemExit("DEVBOX_WIREGUARD_MTU must be an integer from 576 through 9000.")
 
     def configure_container_env_args(self):
         self.container_env_args = []
@@ -462,6 +486,18 @@ class DevBox:
             )
             raise SystemExit(1)
 
+    def ensure_wireguard_config(self):
+        mounted_path = self.container_mount_source(WIREGUARD_CONFIG_CONTAINER_PATH)
+        if mounted_path == self.wireguard_config_host_path:
+            return
+
+        print("Container already exists with different WireGuard configuration.", file=sys.stderr)
+        print(
+            f"Run `{sys.argv[0]} purge` and start it again to apply DEVBOX_WIREGUARD_CONFIG.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
     def ensure_agent_port(self):
         if not self.agent_port:
             return
@@ -505,9 +541,14 @@ class DevBox:
             raise SystemExit(1)
 
     def start_container(self, *, announce=True):
+        if self.wireguard_config_host_path:
+            print(f"WireGuard: enabled ({self.wireguard_config_host_path})")
+            print(f"WireGuard: attempting connection with MTU {self.wireguard_mtu}...")
+
         if self.container_exists():
             self.ensure_project_mount()
             self.ensure_opencode_config_mount()
+            self.ensure_wireguard_config()
             self.ensure_agent_port()
             self.run_cli(
                 ["start", self.container_name],
@@ -518,8 +559,38 @@ class DevBox:
             self.create_home_volume()
             self.run_new_container()
 
+        self.ensure_container_started()
+
+        if self.wireguard_config_host_path:
+            print("WireGuard: tunnel interface started.")
+
         if announce:
             self.print_start_summary()
+
+    def container_logs(self):
+        result = self.run_cli(["logs", self.container_name], capture=True, stderr=subprocess.STDOUT)
+        return result.stdout.strip() if result.returncode == 0 else ""
+
+    def ensure_container_started(self):
+        container = self.container_inspect()
+        if self.container_running_state(container):
+            return
+
+        state = container.get("State", {}) if container else {}
+        exit_code = state.get("ExitCode")
+        if exit_code is None:
+            print(f"Container failed to start: {self.container_name}", file=sys.stderr)
+        else:
+            print(f"Container exited with status {exit_code}: {self.container_name}", file=sys.stderr)
+
+        error = state.get("Error", "")
+        if error:
+            print(error, file=sys.stderr)
+        logs = self.container_logs()
+        if logs:
+            print("Container logs:", file=sys.stderr)
+            print(logs, file=sys.stderr)
+        raise SystemExit(1)
 
     def create_home_volume(self):
         self.run_cli(
@@ -558,12 +629,33 @@ class DevBox:
 
         return ["-p", f"{self.agent_port}:10012"]
 
+    def wireguard_args(self):
+        if not self.wireguard_config_host_path:
+            return []
+
+        return [
+            "--cap-add",
+            "NET_ADMIN",
+            "--sysctl",
+            "net.ipv4.conf.all.src_valid_mark=1",
+            "-v",
+            f"{self.wireguard_config_host_path}:{WIREGUARD_CONFIG_CONTAINER_PATH}:ro",
+            "-e",
+            f"DEVBOX_WIREGUARD_MTU={self.wireguard_mtu}",
+        ]
+
     def workspace_link_command(self):
-        return (
+        command = (
             f"rm -rf {WORKSPACE_LINK} && "
             f"ln -s {shlex.quote(self.project_container_dir)} {WORKSPACE_LINK} && "
             "exec sleep infinity"
         )
+        if self.wireguard_config_host_path:
+            return (
+                f"wg-quick up {WIREGUARD_CONFIG_CONTAINER_PATH} && "
+                f"ip link set dev devbox mtu {self.wireguard_mtu} && {command}"
+            )
+        return command
 
     def run_new_container(self):
         self.run_cli(
@@ -586,6 +678,7 @@ class DevBox:
                 *self.container_env_args,
                 *self.opencode_config_mount_args(),
                 *self.agent_port_args(),
+                *self.wireguard_args(),
                 "-w",
                 self.project_container_dir,
                 IMAGE,
@@ -683,8 +776,14 @@ class DevBox:
             print("    ports:")
             print('      - "${DEVBOX_AGENT_PORT}:10012"')
 
+        if self.wireguard_config_host_path:
+            print("    cap_add:")
+            print("      - NET_ADMIN")
+            print("    sysctls:")
+            print("      net.ipv4.conf.all.src_valid_mark: \"1\"")
+
         print("    labels:")
-        print('      com.alexandru.devbox: "true"')
+        print('      org.alexn.devbox: "true"')
         print(f"      {HOME_VOLUME_LABEL}: {yaml_quote(self.home_volume)}")
 
         self.compose_environment()
@@ -692,7 +791,7 @@ class DevBox:
 
     def compose_environment(self):
         auth_envs = configured_auth_envs()
-        if not (auth_envs or self.opencode_config_host_dir or has_ssh_auth_sock()):
+        if not (auth_envs or self.opencode_config_host_dir or self.wireguard_config_host_path or has_ssh_auth_sock()):
             return
 
         print("    environment:")
@@ -702,6 +801,9 @@ class DevBox:
 
         if self.opencode_config_host_dir:
             print(f"      OPENCODE_CONFIG_DIR: {yaml_quote(OPENCODE_CONFIG_CONTAINER_DIR)}")
+
+        if self.wireguard_config_host_path:
+            print(f"      DEVBOX_WIREGUARD_MTU: {yaml_quote(self.wireguard_mtu)}")
 
         if has_ssh_auth_sock():
             print('      SSH_AUTH_SOCK: "${SSH_AUTH_SOCK}"')
@@ -720,6 +822,12 @@ class DevBox:
             print('        source: "${DEVBOX_OPENCODE_CONFIG_DIR}"')
             print(f"        target: {yaml_quote(OPENCODE_CONFIG_CONTAINER_DIR)}")
 
+        if self.wireguard_config_host_path:
+            print("      - type: bind")
+            print('        source: "${DEVBOX_WIREGUARD_CONFIG}"')
+            print(f"        target: {yaml_quote(WIREGUARD_CONFIG_CONTAINER_PATH)}")
+            print("        read_only: true")
+
         if has_ssh_auth_sock():
             print("      - type: bind")
             print('        source: "${SSH_AUTH_SOCK}"')
@@ -731,7 +839,7 @@ class DevBox:
         print("  home:")
         print(f"    name: {yaml_quote(self.home_volume)}")
         print("    labels:")
-        print('      com.alexandru.devbox: "true"')
+        print('      org.alexn.devbox: "true"')
 
     def purge_container(self):
         if self.container_exists():
@@ -880,6 +988,10 @@ Environment:
   DEVBOX_HOME_VOLUME                Shared /home/dev volume name. Defaults to {HOME_VOLUME_NAME}.
   DEVBOX_HOME_VOLUME_PREFIX         Legacy per-workspace /home/dev volume prefix removed by purge-all. Defaults to {LEGACY_HOME_VOLUME_PREFIX}.
   DEVBOX_OPENCODE_CONFIG_DIR        Optional host config directory mounted read-write; sets OPENCODE_CONFIG_DIR={OPENCODE_CONFIG_CONTAINER_DIR} inside the container.
+  DEVBOX_WIREGUARD_CONFIG           Optional path to a WireGuard configuration file. When set, all devbox traffic uses it; requires NET_ADMIN support. 
+  DEVBOX_WIREGUARD_MTU              Tunnel MTU used when WireGuard is enabled. Defaults to 1420; lower it if large transfers stall. Valid range: 576-9000.
+
+Environment forwarded to OpenCode:
 {auth_environment_help()}
 """
 
@@ -1035,6 +1147,7 @@ def main(argv=None):
 
     if namespace.command in {"start", "restart", "shell", "exec", "compose", "agent", "agent-serve"}:
         devbox.configure_opencode_config_mount()
+        devbox.configure_wireguard()
 
     devbox.configure_agent_port()
     devbox.configure_container_env_args()

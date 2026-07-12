@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+RESOLV_CONF="/etc/resolv.conf"
+action=""
+iface=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -a) action="add"; iface="$2"; shift ;;
+        -d) action="delete"; iface="$2"; shift ;;
+        -m|-x|-f|-p) ;;  # ignored
+        *) ;;
+    esac
+    shift || true
+done
+
+case "$action" in
+    add)
+        nameservers=()
+        searches=()
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            line="${line%%#*}"
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            [[ -n "$line" ]] || continue
+            read -r keyword value <<< "$line"
+            case "$keyword" in
+                nameserver) nameservers+=("$value") ;;
+                search) searches+=("$value") ;;
+            esac
+        done
+        {
+            for ns in "${nameservers[@]}"; do
+                echo "nameserver $ns"
+            done
+            for s in "${searches[@]}"; do
+                echo "search $s"
+            done
+        } > "$RESOLV_CONF"
+        ;;
+    delete)
+        : > "$RESOLV_CONF"
+        ;;
+esac

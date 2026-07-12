@@ -197,8 +197,99 @@ class ConfigurationTest(unittest.TestCase):
             ["-e", "TOKEN=secret", "-e", "OPENCODE_CONFIG_DIR=/opt/opencode-config"],
         )
 
+    def test_wireguard_is_disabled_without_configuration(self):
+        instance = new_devbox()
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            instance.configure_wireguard()
+
+        self.assertEqual(instance.wireguard_config_host_path, "")
+        self.assertEqual(instance.wireguard_args(), [])
+        self.assertNotIn("wg-quick", instance.workspace_link_command())
+
+    def test_wireguard_configuration_adds_mount_and_network_admin(self):
+        instance = new_devbox(container_cli="podman")
+        globals_ = instance.configure_wireguard.__globals__
+
+        with mock.patch.dict(os.environ, {"DEVBOX_WIREGUARD_CONFIG": "~/wg.conf"}, clear=True), mock.patch.dict(
+            globals_, {"canonical_file": lambda _path, _description: "/home/alex/wg.conf"}
+        ):
+            instance.configure_wireguard()
+
+        self.assertEqual(instance.wireguard_config_host_path, "/home/alex/wg.conf")
+        self.assertEqual(instance.wireguard_mtu, "1420")
+        self.assertEqual(
+            instance.wireguard_args(),
+            [
+                "--cap-add",
+                "NET_ADMIN",
+                "--sysctl",
+                "net.ipv4.conf.all.src_valid_mark=1",
+                "-v",
+                "/home/alex/wg.conf:/etc/wireguard/devbox.conf:ro",
+                "-e",
+                "DEVBOX_WIREGUARD_MTU=1420",
+            ],
+        )
+        self.assertTrue(
+            instance.workspace_link_command().startswith(
+                "wg-quick up /etc/wireguard/devbox.conf && ip link set dev devbox mtu 1420 && "
+            )
+        )
+
+    def test_wireguard_rejects_invalid_mtu(self):
+        instance = new_devbox(container_cli="podman")
+        globals_ = instance.configure_wireguard.__globals__
+
+        with mock.patch.dict(
+            os.environ,
+            {"DEVBOX_WIREGUARD_CONFIG": "/wg.conf", "DEVBOX_WIREGUARD_MTU": "huge"},
+            clear=True,
+        ), mock.patch.dict(globals_, {"canonical_file": lambda _path, _description: "/wg.conf"}):
+            with self.assertRaisesRegex(SystemExit, "DEVBOX_WIREGUARD_MTU"):
+                instance.configure_wireguard()
+
+    def test_wireguard_fails_early_with_explanation_on_wslc(self):
+        instance = new_devbox(container_cli="wslc.exe")
+        globals_ = instance.configure_wireguard.__globals__
+
+        with mock.patch.dict(os.environ, {"DEVBOX_WIREGUARD_CONFIG": "/wg.conf"}, clear=True), mock.patch.dict(
+            globals_, {"canonical_file": lambda _path, _description: "/wg.conf"}
+        ):
+            with self.assertRaisesRegex(SystemExit, "wslc.*NET_ADMIN"):
+                instance.configure_wireguard()
+
+    def test_help_env_documents_optional_wireguard_configuration(self):
+        help_text = DEVBOX["ENVIRONMENT_HELP"]
+
+        self.assertIn("DEVBOX_WIREGUARD_CONFIG", help_text)
+        self.assertIn("DEVBOX_WIREGUARD_MTU", help_text)
+        self.assertIn("optional", help_text.lower())
+
 
 class ContainerExecutionTest(unittest.TestCase):
+    def test_start_reports_wireguard_attempt_and_fails_if_container_exits(self):
+        instance = new_devbox(container_cli="podman")
+        instance.wireguard_config_host_path = "/wg.conf"
+        instance.wireguard_mtu = "1420"
+
+        with mock.patch.object(instance, "container_exists", return_value=False), mock.patch.object(
+            instance, "create_home_volume"
+        ), mock.patch.object(instance, "run_new_container"), mock.patch.object(
+            instance,
+            "container_inspect",
+            return_value={"State": {"Running": False, "ExitCode": 127, "Error": ""}},
+        ), mock.patch.object(instance, "container_logs", return_value="wg-quick: not found"), mock.patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout, mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            with self.assertRaisesRegex(SystemExit, "1"):
+                instance.start_container()
+
+        self.assertIn("WireGuard: enabled", stdout.getvalue())
+        self.assertIn("attempting connection", stdout.getvalue())
+        self.assertIn("exited with status 127", stderr.getvalue())
+        self.assertIn("wg-quick: not found", stderr.getvalue())
+
     def test_windows_uses_subprocess_for_cli_path_containing_spaces(self):
         cli = r"C:\Program Files\WSL\wslc.exe"
         instance = new_devbox("shell", container_cli=cli)

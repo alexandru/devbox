@@ -15,6 +15,8 @@ RUN apt-get update && \
         curl \
         direnv \
         git \
+        iproute2 \
+        iptables \
         gnupg \
         less \
         openssh-client \
@@ -22,6 +24,7 @@ RUN apt-get update && \
         tar \
         unzip \
         wget \
+        wireguard-tools \
         zip && \
     rm -rf /var/lib/apt/lists/* && \
     rm -rf /tmp/*
@@ -75,7 +78,8 @@ ENV PATH="/opt/opencode-config/bin:/usr/local/bin:${PATH}"
 
 COPY bin/devbox-entrypoint /usr/local/bin/devbox-entrypoint
 COPY bin/osc52-clipboard /usr/local/bin/osc52-clipboard
-RUN chmod 0755 /usr/local/bin/devbox-entrypoint /usr/local/bin/osc52-clipboard && \
+COPY bin/resolvconf /usr/local/bin/resolvconf
+RUN chmod 0755 /usr/local/bin/devbox-entrypoint /usr/local/bin/osc52-clipboard /usr/local/bin/resolvconf && \
     ln -sf /usr/local/bin/osc52-clipboard /usr/local/bin/wl-copy && \
     ln -sf /usr/local/bin/osc52-clipboard /usr/local/bin/xclip && \
     ln -sf /usr/local/bin/osc52-clipboard /usr/local/bin/xsel && \
