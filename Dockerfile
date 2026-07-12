@@ -13,18 +13,27 @@ RUN apt-get update && \
         ca-certificates \
         curl \
         direnv \
+        fd-find \
+        file \
         git \
+        jq \
         iproute2 \
         iptables \
         gnupg \
         less \
+        make \
         openssh-client \
+        patch \
+        procps \
+        ripgrep \
         sudo \
         tar \
+        tree \
         unzip \
         wget \
         wireguard-tools \
         zip && \
+    ln -s /usr/bin/fdfind /usr/local/bin/fd && \
     rm -rf /var/lib/apt/lists/* && \
     rm -rf /tmp/*
 
