@@ -4,7 +4,6 @@ ARG USER_UID="1000"
 ARG USER_GID="1000"
 ARG NODE_MAJOR="24"
 
-SHELL ["/bin/bash", "-lc"]
 ENV DEBIAN_FRONTEND=noninteractive
 ENV SDKMAN_DIR=/opt/sdkman
 

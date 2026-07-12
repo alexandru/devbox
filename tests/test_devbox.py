@@ -37,6 +37,11 @@ class ContainerPathTest(unittest.TestCase):
 
 
 class HelperTest(unittest.TestCase):
+    def test_dockerfile_uses_portable_default_shell(self):
+        dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
+
+        self.assertNotIn("\nSHELL ", dockerfile)
+
     def test_path_is_within_includes_parent_and_children_but_not_siblings(self):
         path_is_within = DEVBOX["path_is_within"]
 
