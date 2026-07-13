@@ -753,6 +753,8 @@ class DevBox:
             "NET_ADMIN",
             "--sysctl",
             "net.ipv4.conf.all.src_valid_mark=1",
+            "--add-host",
+            "host.docker.internal:host-gateway",
         ]
         if self.wireguard_config_host_path:
             args.extend(["-v", f"{self.wireguard_config_host_path}:{WIREGUARD_CONFIG_CONTAINER_PATH}:ro"])
