@@ -763,6 +763,26 @@ class DevBox:
         args.extend(["-e", f"DEVBOX_WIREGUARD_MTU={self.wireguard_mtu}"])
         return args
 
+    def wireguard_host_route_command(self):
+        # wg-quick suppresses the main default route for a full tunnel. A specific
+        # main-table route keeps Docker Desktop's host endpoint outside the tunnel.
+        return (
+            'HOST_DOCKER_INTERNAL_IP="$(getent ahostsv4 host.docker.internal | '
+            "awk 'NR == 1 { print $1; exit }')\" && "
+            'test -n "$HOST_DOCKER_INTERNAL_IP" && '
+            'HOST_DOCKER_INTERNAL_ROUTE="$(ip -4 route get "$HOST_DOCKER_INTERNAL_IP")" && '
+            'HOST_DOCKER_INTERNAL_GATEWAY="$(printf \'%s\\n\' "$HOST_DOCKER_INTERNAL_ROUTE" | '
+            "awk '{ for (i = 1; i < NF; i++) if ($i == \"via\") { print $(i + 1); exit } }')\" && "
+            'HOST_DOCKER_INTERNAL_DEVICE="$(printf \'%s\\n\' "$HOST_DOCKER_INTERNAL_ROUTE" | '
+            "awk '{ for (i = 1; i < NF; i++) if ($i == \"dev\") { print $(i + 1); exit } }')\" && "
+            'test -n "$HOST_DOCKER_INTERNAL_DEVICE" && '
+            'if [ -n "$HOST_DOCKER_INTERNAL_GATEWAY" ]; then '
+            'ip -4 route replace table main "$HOST_DOCKER_INTERNAL_IP/32" '
+            'via "$HOST_DOCKER_INTERNAL_GATEWAY" dev "$HOST_DOCKER_INTERNAL_DEVICE"; '
+            'else ip -4 route replace table main "$HOST_DOCKER_INTERNAL_IP/32" '
+            'dev "$HOST_DOCKER_INTERNAL_DEVICE"; fi'
+        )
+
     def workspace_link_command(self):
         command = (
             f"rm -rf {WORKSPACE_LINK} && "
@@ -778,7 +798,8 @@ class DevBox:
                     f"chmod 600 {WIREGUARD_CONFIG_CONTAINER_PATH} && "
                 )
             return (
-                f"{config_command}wg-quick up {WIREGUARD_CONFIG_CONTAINER_PATH} && "
+                f"{config_command}{self.wireguard_host_route_command()} && "
+                f"wg-quick up {WIREGUARD_CONFIG_CONTAINER_PATH} && "
                 f"ip link set dev devbox mtu {self.wireguard_mtu} && {command}"
             )
         return command
@@ -907,6 +928,8 @@ class DevBox:
             print("      - NET_ADMIN")
             print("    sysctls:")
             print("      net.ipv4.conf.all.src_valid_mark: \"1\"")
+            print("    extra_hosts:")
+            print('      - "host.docker.internal:host-gateway"')
 
         print("    labels:")
         print('      org.alexn.devbox: "true"')

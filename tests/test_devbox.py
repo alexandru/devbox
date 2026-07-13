@@ -240,9 +240,13 @@ class ConfigurationTest(unittest.TestCase):
         )
         self.assertTrue(
             instance.workspace_link_command().startswith(
-                "wg-quick up /etc/wireguard/devbox.conf && ip link set dev devbox mtu 1420 && "
+                'HOST_DOCKER_INTERNAL_IP="$(getent ahostsv4 host.docker.internal '
             )
         )
+        command = instance.workspace_link_command()
+        self.assertIn('ip -4 route get "$HOST_DOCKER_INTERNAL_IP"', command)
+        self.assertIn('ip -4 route replace table main "$HOST_DOCKER_INTERNAL_IP/32"', command)
+        self.assertLess(command.index("ip -4 route replace"), command.index("wg-quick up"))
 
     def test_wireguard_string_configuration_is_forwarded_without_mount(self):
         instance = new_devbox(container_cli="podman")
@@ -271,6 +275,19 @@ class ConfigurationTest(unittest.TestCase):
         command = instance.workspace_link_command()
         self.assertIn('printf \'%s\' "$DEVBOX_WIREGUARD_CONFIG_STR" > /etc/wireguard/devbox.conf', command)
         self.assertLess(command.index("printf"), command.index("wg-quick"))
+
+    def test_wireguard_compose_maps_the_docker_host(self):
+        instance = new_devbox("compose", container_cli="docker")
+        instance.wireguard_config_host_path = "/wg.conf"
+        instance.wireguard_mtu = "1420"
+
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            instance.compose_service()
+
+        self.assertIn(
+            '    extra_hosts:\n      - "host.docker.internal:host-gateway"\n',
+            stdout.getvalue(),
+        )
 
     def test_wireguard_rejects_path_and_string_configuration_together(self):
         instance = new_devbox(container_cli="podman")
