@@ -30,7 +30,6 @@ RUN apt-get update && \
         sudo \
         tar \
         tree \
-        tmux \
         unzip \
         wget \
         wireguard-tools \

@@ -37,11 +37,6 @@ class ContainerPathTest(unittest.TestCase):
 
 
 class HelperTest(unittest.TestCase):
-    def test_dockerfile_installs_tmux(self):
-        dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
-
-        self.assertIn("        tmux \\\n", dockerfile)
-
     def test_dockerfile_uses_portable_default_shell(self):
         dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
 
