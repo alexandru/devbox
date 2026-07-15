@@ -342,6 +342,35 @@ class ConfigurationTest(unittest.TestCase):
 
 
 class ContainerExecutionTest(unittest.TestCase):
+    def test_project_mount_mismatch_reports_running_and_current_configuration(self):
+        instance = new_devbox(container_cli="docker")
+        instance.project_mount_dir = "/current/workspace"
+        instance.project_container_mount_dir = "/current/workspace"
+        instance.project_container_dir = "/current/workspace/project"
+        container = {
+            "Config": {"WorkingDir": "/running/workspace/project"},
+            "Mounts": [
+                {"Source": "/running/workspace", "Destination": "/running/workspace"},
+            ],
+        }
+
+        with mock.patch.object(instance, "container_inspect", return_value=container), mock.patch(
+            "sys.stderr", new_callable=io.StringIO
+        ) as stderr:
+            with self.assertRaisesRegex(SystemExit, "1"):
+                instance.ensure_project_mount()
+
+        output = stderr.getvalue()
+        for expected in (
+            "Running container configuration:",
+            "Project: /running/workspace -> /running/workspace",
+            "Workdir: /running/workspace/project",
+            "Current configuration:",
+            "Project: /current/workspace -> /current/workspace",
+            "Workdir: /current/workspace/project",
+        ):
+            self.assertIn(expected, output)
+
     def test_start_reports_wireguard_attempt_and_fails_if_container_exits(self):
         instance = new_devbox(container_cli="podman")
         instance.wireguard_config_host_path = "/wg.conf"

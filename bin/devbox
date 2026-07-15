@@ -428,15 +428,7 @@ class DevBox:
     def container_opencode_config_source(self):
         return self.container_mount_source(OPENCODE_CONFIG_CONTAINER_DIR)
 
-    def container_project_mount_source(self):
-        return self.container_mount_source(self.project_container_mount_dir)
-
-    def container_working_dir(self):
-        container = self.inspect_object(self.container_name)
-        return container.get("Config", {}).get("WorkingDir", "")
-
-    def container_workspace_mount(self):
-        container = self.container_inspect()
+    def workspace_mount(self, container):
         workdir = container.get("Config", {}).get("WorkingDir", "")
         if not workdir:
             return "", ""
@@ -452,11 +444,17 @@ class DevBox:
             candidates.append((destination, source))
 
         if not candidates:
-            print("Container does not have a workspace bind mount.", file=sys.stderr)
-            raise SystemExit(1)
+            return "", ""
 
         destination, source = min(candidates, key=lambda mount: len(mount[0]))
         return os.path.realpath(source), destination
+
+    def container_workspace_mount(self):
+        mount = self.workspace_mount(self.container_inspect())
+        if not all(mount):
+            print("Container does not have a workspace bind mount.", file=sys.stderr)
+            raise SystemExit(1)
+        return mount
 
     def container_directory(self, host_directory):
         requested_dir = canonical_dir(host_directory, "Requested")
@@ -538,29 +536,32 @@ class DevBox:
         raise SystemExit(1)
 
     def ensure_project_mount(self):
-        if self.container_project_mount_source() != self.project_mount_dir:
-            print(
-                "Container already exists with an outdated project mount.",
-                file=sys.stderr,
-            )
-            print(
-                f"Run `{sys.argv[0]} purge` and start it again "
-                "to mount the project at its full container path.",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
+        container = self.container_inspect()
+        running_mount_source, running_mount_destination = self.workspace_mount(container)
+        running_workdir = container.get("Config", {}).get("WorkingDir", "")
+        current_mount = (self.project_mount_dir, self.project_container_mount_dir)
 
-        if self.container_working_dir() != self.project_container_dir:
-            print(
-                "Container already exists with an outdated working directory.",
-                file=sys.stderr,
-            )
-            print(
-                f"Run `{sys.argv[0]} purge` and start it again "
-                f"to use {self.project_container_dir}.",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
+        if (
+            (running_mount_source, running_mount_destination) == current_mount
+            and running_workdir == self.project_container_dir
+        ):
+            return
+
+        print("Container already exists with different project configuration.", file=sys.stderr)
+        print("Running container configuration:", file=sys.stderr)
+        if running_mount_source and running_mount_destination:
+            print(f"  Project: {running_mount_source} -> {running_mount_destination}", file=sys.stderr)
+        else:
+            print("  Project: not mounted", file=sys.stderr)
+        print(f"  Workdir: {running_workdir or 'not set'}", file=sys.stderr)
+        print("Current configuration:", file=sys.stderr)
+        print(f"  Project: {self.project_mount_dir} -> {self.project_container_mount_dir}", file=sys.stderr)
+        print(f"  Workdir: {self.project_container_dir}", file=sys.stderr)
+        print(
+            f"Run `{sys.argv[0]} purge` and start it again to apply the current project configuration.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
     def start_container(self, *, announce=True):
         if self.wireguard_enabled():
