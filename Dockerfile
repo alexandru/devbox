@@ -10,6 +10,8 @@ ENV SDKMAN_DIR=/opt/sdkman
 RUN apt-get update && \
     apt-get upgrade -y && \
     apt-get install -y --no-install-recommends \
+        binutils \
+        bsdextrautils \
         ca-certificates \
         curl \
         direnv \
