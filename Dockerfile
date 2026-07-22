@@ -53,6 +53,11 @@ RUN mkdir -p /etc/ssh/ssh_known_hosts.d && \
 
 RUN curl -fsSL "https://get.sdkman.io?ci=true&rcupdate=false" | bash && \
     sed -i 's/^sdkman_auto_env=.*/sdkman_auto_env=true/' "$SDKMAN_DIR/etc/config" && \
+    bash -c 'source "$SDKMAN_DIR/bin/sdkman-init.sh" && \
+        sdk install maven && \
+        sdk install sbt && \
+        sdk install scalacli && \
+        sdk install gradle' && \
     rm -rf "$SDKMAN_DIR/tmp"/*
 
 RUN mkdir -p /tmp/opencode-home && \

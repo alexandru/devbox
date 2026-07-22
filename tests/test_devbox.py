@@ -42,6 +42,14 @@ class HelperTest(unittest.TestCase):
 
         self.assertNotIn("\nSHELL ", dockerfile)
 
+    def test_dockerfile_installs_jvm_build_tools_with_sdkman(self):
+        dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
+
+        self.assertIn('source "$SDKMAN_DIR/bin/sdkman-init.sh"', dockerfile)
+        for candidate in ("maven", "sbt", "scalacli", "gradle"):
+            with self.subTest(candidate=candidate):
+                self.assertIn(f"sdk install {candidate}", dockerfile)
+
     def test_path_is_within_includes_parent_and_children_but_not_siblings(self):
         path_is_within = DEVBOX["path_is_within"]
 
