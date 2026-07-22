@@ -212,6 +212,11 @@ def normalize_container_path(path):
         parts = path.split("\\")
         if len(parts) > 4:
             return "/" + "/".join(parts[4:])
+    if sys.platform == "darwin":
+        if path == "/host_mnt":
+            return "/"
+        if path.startswith("/host_mnt/"):
+            return path[len("/host_mnt"):]
     return path
 
 

@@ -58,6 +58,24 @@ class HelperTest(unittest.TestCase):
         )
         self.assertEqual(normalize("/home/alex/devbox"), "/home/alex/devbox")
 
+    def test_normalizes_docker_desktop_mount_sources_on_macos(self):
+        normalize = DEVBOX["normalize_container_path"]
+
+        with mock.patch.object(DEVBOX["sys"], "platform", "darwin"):
+            self.assertEqual(
+                normalize("/host_mnt/Users/alex/Developer"),
+                "/Users/alex/Developer",
+            )
+
+    def test_preserves_host_mnt_paths_on_linux(self):
+        normalize = DEVBOX["normalize_container_path"]
+
+        with mock.patch.object(DEVBOX["sys"], "platform", "linux"):
+            self.assertEqual(
+                normalize("/host_mnt/Users/alex/Developer"),
+                "/host_mnt/Users/alex/Developer",
+            )
+
     def test_yaml_quote_escapes_quotes_and_backslashes(self):
         self.assertEqual(DEVBOX["yaml_quote"]('a\\b"c'), '"a\\\\b\\"c"')
 
@@ -342,6 +360,26 @@ class ConfigurationTest(unittest.TestCase):
 
 
 class ContainerExecutionTest(unittest.TestCase):
+    def test_project_mount_accepts_docker_desktop_macos_source(self):
+        instance = new_devbox(container_cli="docker")
+        instance.project_mount_dir = "/Users/alex/Developer"
+        instance.project_container_mount_dir = "/Users/alex/Developer"
+        instance.project_container_dir = "/Users/alex/Developer"
+        container = {
+            "Config": {"WorkingDir": "/Users/alex/Developer"},
+            "Mounts": [
+                {
+                    "Source": "/host_mnt/Users/alex/Developer",
+                    "Destination": "/Users/alex/Developer",
+                },
+            ],
+        }
+
+        with mock.patch.object(DEVBOX["sys"], "platform", "darwin"), mock.patch.object(
+            instance, "container_inspect", return_value=container
+        ):
+            instance.ensure_project_mount()
+
     def test_project_mount_mismatch_reports_running_and_current_configuration(self):
         instance = new_devbox(container_cli="docker")
         instance.project_mount_dir = "/current/workspace"
