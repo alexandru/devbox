@@ -61,9 +61,7 @@ RUN curl -fsSL "https://get.sdkman.io?ci=true&rcupdate=false" | bash && \
     rm -rf "$SDKMAN_DIR/tmp"/*
 
 RUN curl -fLo /usr/local/bin/cs https://github.com/coursier/launchers/raw/master/coursier && \
-    chmod 0755 /usr/local/bin/cs && \
-    cs install --contrib --install-dir /usr/local/bin cellar && \
-    rm -rf /root/.cache/coursier
+    chmod 0755 /usr/local/bin/cs
 
 RUN mkdir -p /tmp/opencode-home && \
     curl -fsSL https://opencode.ai/install | HOME=/tmp/opencode-home bash -s -- --no-modify-path && \
@@ -95,7 +93,7 @@ RUN if getent group "$USER_GID" >/dev/null; then \
     chown -R dev:dev /opt/sdkman /workspaces /home/dev
 
 ENV HOME=/home/dev
-ENV PATH="/opt/opencode-config/bin:/usr/local/bin:${PATH}"
+ENV PATH="/opt/opencode-config/bin:/home/dev/.local/share/coursier/bin:/usr/local/bin:${PATH}"
 
 COPY bin/devbox-entrypoint /usr/local/bin/devbox-entrypoint
 COPY bin/osc52-clipboard /usr/local/bin/osc52-clipboard
@@ -109,6 +107,8 @@ RUN chmod 0755 /usr/local/bin/devbox-entrypoint /usr/local/bin/osc52-clipboard /
     chown -R dev:dev /home/dev/.config
 
 USER dev
+RUN cs install --contrib cellar
+
 WORKDIR /home/dev
 VOLUME ["/home/dev"]
 EXPOSE 10012

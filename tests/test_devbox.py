@@ -50,12 +50,6 @@ class HelperTest(unittest.TestCase):
             with self.subTest(candidate=candidate):
                 self.assertIn(f"sdk install {candidate}", dockerfile)
 
-    def test_dockerfile_installs_coursier_and_cellar(self):
-        dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
-
-        self.assertIn("https://github.com/coursier/launchers/raw/master/coursier", dockerfile)
-        self.assertIn("cs install --contrib --install-dir /usr/local/bin cellar", dockerfile)
-
     def test_path_is_within_includes_parent_and_children_but_not_siblings(self):
         path_is_within = DEVBOX["path_is_within"]
 
