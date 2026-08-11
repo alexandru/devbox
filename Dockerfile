@@ -60,6 +60,11 @@ RUN curl -fsSL "https://get.sdkman.io?ci=true&rcupdate=false" | bash && \
         sdk install gradle' && \
     rm -rf "$SDKMAN_DIR/tmp"/*
 
+RUN curl -fLo /usr/local/bin/cs https://github.com/coursier/launchers/raw/master/coursier && \
+    chmod 0755 /usr/local/bin/cs && \
+    cs install --contrib --install-dir /usr/local/bin cellar && \
+    rm -rf /root/.cache/coursier
+
 RUN mkdir -p /tmp/opencode-home && \
     curl -fsSL https://opencode.ai/install | HOME=/tmp/opencode-home bash -s -- --no-modify-path && \
     /tmp/opencode-home/.opencode/bin/opencode --version && \
