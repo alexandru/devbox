@@ -70,6 +70,13 @@ RUN mkdir -p /tmp/opencode-home && \
     chmod 0755 /usr/local/bin/opencode && \
     rm -rf /tmp/opencode-home
 
+RUN mkdir -p /tmp/opencode2-home && \
+    curl -fsSL https://raw.githubusercontent.com/anomalyco/opencode/v2/install | HOME=/tmp/opencode2-home bash -s -- --no-modify-path && \
+    /tmp/opencode2-home/.opencode/bin/opencode2 --version && \
+    cp /tmp/opencode2-home/.opencode/bin/opencode2 /usr/local/bin/opencode2 && \
+    chmod 0755 /usr/local/bin/opencode2 && \
+    rm -rf /tmp/opencode2-home
+
 RUN if getent group "$USER_GID" >/dev/null; then \
         existing_group="$(getent group "$USER_GID" | cut -d: -f1)"; \
         if [ "$existing_group" != "dev" ]; then \
@@ -93,7 +100,7 @@ RUN if getent group "$USER_GID" >/dev/null; then \
     chown -R dev:dev /opt/sdkman /workspaces /home/dev
 
 ENV HOME=/home/dev
-ENV PATH="/opt/opencode-config/bin:/home/dev/.local/share/coursier/bin:/usr/local/bin:${PATH}"
+ENV PATH="/home/dev/.local/share/coursier/bin:/usr/local/bin:${PATH}"
 
 COPY bin/devbox-entrypoint /usr/local/bin/devbox-entrypoint
 COPY bin/osc52-clipboard /usr/local/bin/osc52-clipboard

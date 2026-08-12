@@ -3,9 +3,11 @@
 """
 
 import argparse
+from dataclasses import dataclass
 import json
 import os
 import posixpath
+import re
 import shlex
 import shutil
 import stat
@@ -20,116 +22,36 @@ DEFAULT_HOME_VOLUME = "devbox-home"
 CONTAINER_NAME = "devbox"
 CONTAINER_LABEL = "org.alexn.devbox=true"
 HOME_VOLUME_LABEL = "org.alexn.devbox.home-volume"
-OPENCODE_CONFIG_CONTAINER_DIR = "/opt/opencode-config"
+MOUNTS_LABEL = "org.alexn.devbox.mounts"
 WORKSPACE_LINK = "/workspace"
 EXEC_WORKDIR = "/workspace"
 CONTAINER_USER = "dev"
 ROOT_USER = "root"
 
-AUTH_ENV_NAMES = (
-    "302AI_API_KEY",
-    "ABACUS_API_KEY",
-    "ABLIT_KEY",
-    "AI_GATEWAY_API_KEY",
-    "AICORE_SERVICE_KEY",
-    "AIHUBMIX_API_KEY",
-    "ALIBABA_CODING_PLAN_API_KEY",
-    "AWS_ACCESS_KEY_ID",
-    "AWS_BEARER_TOKEN_BEDROCK",
-    "AWS_REGION",
-    "AWS_SECRET_ACCESS_KEY",
-    "AZURE_API_KEY",
-    "AZURE_COGNITIVE_SERVICES_API_KEY",
-    "AZURE_COGNITIVE_SERVICES_RESOURCE_NAME",
-    "AZURE_RESOURCE_NAME",
-    "BAILING_API_TOKEN",
-    "BASETEN_API_KEY",
-    "CEREBRAS_API_KEY",
-    "CHUTES_API_KEY",
-    "CLOUDFERRO_SHERLOCK_API_KEY",
-    "CLOUDFLARE_ACCOUNT_ID",
-    "CLOUDFLARE_API_KEY",
-    "CLOUDFLARE_API_TOKEN",
-    "CLOUDFLARE_GATEWAY_ID",
-    "COHERE_API_KEY",
-    "CORTECS_API_KEY",
-    "DASHSCOPE_API_KEY",
-    "DATABRICKS_HOST",
-    "DATABRICKS_TOKEN",
-    "DEEPINFRA_API_KEY",
-    "DEEPSEEK_API_KEY",
-    "DIGITALOCEAN_ACCESS_TOKEN",
-    "DINFERENCE_API_KEY",
-    "EVROC_API_KEY",
-    "FASTROUTER_API_KEY",
-    "FIREPASS_API_KEY",
-    "FIREWORKS_API_KEY",
-    "FRIENDLI_TOKEN",
-    "FROGBOT_API_KEY",
-    "GEMINI_API_KEY",
-    "GITHUB_TOKEN",
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    "GOOGLE_GENERATIVE_AI_API_KEY",
-    "GOOGLE_VERTEX_LOCATION",
-    "GOOGLE_VERTEX_PROJECT",
-    "GROQ_API_KEY",
-    "HELICONE_API_KEY",
-    "HF_TOKEN",
-    "IFLOW_API_KEY",
-    "INFERENCE_API_KEY",
-    "INCEPTION_API_KEY",
-    "IOINTELLIGENCE_API_KEY",
-    "JIEKOU_API_KEY",
-    "KILO_API_KEY",
-    "KIMI_API_KEY",
-    "KUAE_API_KEY",
-    "LLAMA_API_KEY",
-    "LLMGATEWAY_API_KEY",
-    "LMSTUDIO_API_KEY",
-    "LUCIDQUERY_API_KEY",
-    "MEGANOVA_API_KEY",
-    "MINIMAX_API_KEY",
-    "MISTRAL_API_KEY",
-    "MIXLAYER_API_KEY",
-    "MOARK_API_KEY",
-    "MOONSHOT_API_KEY",
-    "MORPH_API_KEY",
-    "NANO_GPT_API_KEY",
-    "NEBIUS_API_KEY",
-    "NOVITA_API_KEY",
-    "NVIDIA_API_KEY",
-    "OLLAMA_API_KEY",
-    "OPENAI_API_KEY",
-    "OPENCODE_API_KEY",
-    "OPENROUTER_API_KEY",
-    "OVHCLOUD_API_KEY",
-    "PERPLEXITY_API_KEY",
-    "POE_API_KEY",
-    "PRIVATEMODE_API_KEY",
-    "PRIVATEMODE_ENDPOINT",
-    "QINIU_API_KEY",
-    "REQUESTY_API_KEY",
-    "SCALEWAY_API_KEY",
-    "SILICONFLOW_API_KEY",
-    "SILICONFLOW_CN_API_KEY",
-    "STACKIT_API_KEY",
-    "STEPFUN_API_KEY",
-    "SUBMODEL_INSTAGEN_ACCESS_KEY",
-    "SYNTHETIC_API_KEY",
-    "TENCENT_CODING_PLAN_API_KEY",
-    "THEGRIDAI_API_KEY",
-    "UPSTAGE_API_KEY",
-    "V0_API_KEY",
-    "VENICE_API_KEY",
-    "VIVGRID_API_KEY",
-    "VULTR_API_KEY",
-    "WAFER_API_KEY",
-    "WANDB_API_KEY",
-    "XAI_API_KEY",
-    "XIAOMI_API_KEY",
-    "ZENMUX_API_KEY",
-    "ZHIPU_API_KEY",
+RESERVED_ENV_NAMES = frozenset(
+    {
+        "DEVBOX_IMAGE",
+        "DEVBOX_AGENT_PORT",
+        "DEVBOX_HOME_VOLUME",
+        "DEVBOX_HOME_VOLUME_PREFIX",
+        "DEVBOX_WIREGUARD_CONFIG_PATH",
+        "DEVBOX_WIREGUARD_CONFIG_STR",
+        "DEVBOX_WIREGUARD_MTU",
+    }
 )
+ENVIRONMENT_SUFFIX_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+@dataclass(frozen=True)
+class Mount:
+    original: str
+    source: str
+    target: str
+    options: str
+
+    def volume_spec(self):
+        suffix = f":{self.options}" if self.options else ""
+        return f"{self.source}:{self.target}{suffix}"
 
 IMAGE = os.environ.get("DEVBOX_IMAGE") or DEFAULT_IMAGE
 HOME_VOLUME_NAME = os.environ.get("DEVBOX_HOME_VOLUME") or DEFAULT_HOME_VOLUME
@@ -195,10 +117,6 @@ def project_mount_path(project_dir):
     return os.path.commonpath(paths)
 
 
-def opencode_config_path(path):
-    return canonical_dir(path, "OpenCode config")
-
-
 def home_volume():
     return HOME_VOLUME_NAME
 
@@ -228,33 +146,66 @@ def container_path(path):
 
 
 def yaml_quote(value):
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+    return json.dumps(value)
 
 
-def auth_env_name(name):
-    return f"DEVBOX_AUTH_{name}"
-
-
-def configured_auth_envs():
-    auth_envs = {}
-
-    for name in AUTH_ENV_NAMES:
-        source_name = auth_env_name(name)
-        value = os.environ.get(source_name)
-        if not value:
+def configured_container_envs():
+    environment = []
+    for source_name in sorted(os.environ):
+        if not source_name.startswith("DEVBOX_") or source_name in RESERVED_ENV_NAMES:
             continue
+        target = source_name.removeprefix("DEVBOX_")
+        if not ENVIRONMENT_SUFFIX_PATTERN.fullmatch(target):
+            raise SystemExit(
+                f"Invalid environment variable name after DEVBOX_ prefix: {source_name}"
+            )
+        environment.append((source_name, target, os.environ[source_name]))
+    return environment
 
-        auth_envs[name] = (source_name, value)
 
-    return auth_envs
+def canonical_mount_source(path):
+    if not os.path.exists(path):
+        raise SystemExit(f"Mount source does not exist: {path}")
+    return os.path.realpath(path)
 
 
-def auth_environment_help():
-    return "\n".join(
-        f"  {auth_env_name(name):<48} Forwarded as {name}."
-        for name in AUTH_ENV_NAMES
-    )
+def split_mount_specification(specification):
+    separator_indexes = [index for index, character in enumerate(specification) if character == ":"]
+    if (
+        len(specification) >= 3
+        and specification[0].isalpha()
+        and specification[1] == ":"
+        and specification[2] in {"\\", "/"}
+    ):
+        separator_indexes = separator_indexes[1:]
+    if not separator_indexes:
+        raise SystemExit(
+            f"Invalid mount specification: {specification}. Expected HOST:CONTAINER[:OPTIONS]."
+        )
+
+    source_end = separator_indexes[0]
+    source = specification[:source_end]
+    remainder = specification[source_end + 1 :]
+    target, separator, options = remainder.partition(":")
+    if not source or not target:
+        raise SystemExit(
+            f"Invalid mount specification: {specification}. Expected HOST:CONTAINER[:OPTIONS]."
+        )
+    return source, target, options if separator else ""
+
+
+def parse_mounts(specifications):
+    mounts = []
+    targets = set()
+    for specification in specifications:
+        source, target, options = split_mount_specification(specification)
+        if not posixpath.isabs(target):
+            raise SystemExit(f"Mount target must be an absolute container path: {target}")
+        if target in targets:
+            raise SystemExit(f"Duplicate mount target: {target}")
+        targets.add(target)
+        mounts.append(Mount(specification, canonical_mount_source(source), target, options))
+    return mounts
 
 
 def has_ssh_auth_sock():
@@ -297,7 +248,7 @@ class DevBox:
         self.container_cli = container_cli or ""
         self.container_name = CONTAINER_NAME
         self.home_volume = home_volume()
-        self.opencode_config_host_dir = ""
+        self.mounts = []
         self.agent_port = ""
         self.container_env_args = []
         self.wireguard_config_host_path = ""
@@ -352,11 +303,6 @@ class DevBox:
         objects = self.inspect_objects(name)
         return objects[0] if objects else {}
 
-    def configure_opencode_config_mount(self):
-        config_dir = os.environ.get("DEVBOX_OPENCODE_CONFIG_DIR")
-        if config_dir:
-            self.opencode_config_host_dir = opencode_config_path(config_dir)
-
     def configure_wireguard(self):
         config_path = os.environ.get("DEVBOX_WIREGUARD_CONFIG_PATH", "")
         config_str = os.environ.get("DEVBOX_WIREGUARD_CONFIG_STR", "")
@@ -384,11 +330,8 @@ class DevBox:
     def configure_container_env_args(self):
         self.container_env_args = []
 
-        for target, (_, value) in configured_auth_envs().items():
+        for _, target, value in configured_container_envs():
             self.container_env_args.extend(["-e", f"{target}={value}"])
-
-        if self.opencode_config_host_dir:
-            self.container_env_args.extend(["-e", f"OPENCODE_CONFIG_DIR={OPENCODE_CONFIG_CONTAINER_DIR}"])
 
     def configure_agent_port(self):
         self.agent_port = os.environ.get("DEVBOX_AGENT_PORT", "")
@@ -429,9 +372,6 @@ class DevBox:
             if mount.get("Destination") == destination:
                 return normalize_container_path(mount.get("Source", ""))
         return ""
-
-    def container_opencode_config_source(self):
-        return self.container_mount_source(OPENCODE_CONFIG_CONTAINER_DIR)
 
     def workspace_mount(self, container):
         workdir = container.get("Config", {}).get("WorkingDir", "")
@@ -486,21 +426,27 @@ class DevBox:
             bindings = container.get("Ports", {}).get("10012/tcp") or []
         return [binding.get("HostPort", "") for binding in bindings if binding.get("HostPort")]
 
-    def ensure_opencode_config_mount(self):
-        if not self.opencode_config_host_dir:
-            return
+    def mount_label(self):
+        metadata = [
+            {"source": mount.source, "target": mount.target, "options": mount.options}
+            for mount in self.mounts
+        ]
+        return json.dumps(
+            sorted(metadata, key=lambda mount: (mount["target"], mount["source"], mount["options"])),
+            separators=(",", ":"),
+        )
 
-        source = self.container_opencode_config_source()
-        if source != self.opencode_config_host_dir:
-            print(
-                "Container already exists without the requested OpenCode config mount.",
-                file=sys.stderr,
-            )
-            print(
-                f"Run `{sys.argv[0]} purge` and start it again to apply DEVBOX_OPENCODE_CONFIG_DIR.",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
+    def ensure_custom_mounts(self):
+        labels = self.container_inspect().get("Config", {}).get("Labels", {}) or {}
+        current = labels.get(MOUNTS_LABEL, "[]")
+        if current == self.mount_label():
+            return
+        print("Container already exists with different custom mounts.", file=sys.stderr)
+        print(
+            f"Run `{sys.argv[0]} purge` and start it again to apply the requested mounts.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
     def ensure_wireguard_config(self):
         mounted_path = self.container_mount_source(WIREGUARD_CONFIG_CONTAINER_PATH)
@@ -576,7 +522,7 @@ class DevBox:
 
         if self.container_exists():
             self.ensure_project_mount()
-            self.ensure_opencode_config_mount()
+            self.ensure_custom_mounts()
             self.ensure_wireguard_config()
             self.ensure_agent_port()
             self.run_cli(
@@ -643,14 +589,11 @@ class DevBox:
         ssh_auth_sock = os.environ["SSH_AUTH_SOCK"]
         return ["-v", f"{ssh_auth_sock}:{ssh_auth_sock}", "-e", f"SSH_AUTH_SOCK={ssh_auth_sock}"]
 
-    def opencode_config_mount_args(self):
-        if not self.opencode_config_host_dir:
-            return []
-
-        return [
-            "-v",
-            f"{self.opencode_config_host_dir}:{OPENCODE_CONFIG_CONTAINER_DIR}",
-        ]
+    def custom_mount_args(self):
+        arguments = []
+        for mount in self.mounts:
+            arguments.extend(["-v", mount.volume_spec()])
+        return arguments
 
     def agent_port_args(self):
         if not self.agent_port:
@@ -821,6 +764,8 @@ class DevBox:
                 CONTAINER_LABEL,
                 "--label",
                 f"{HOME_VOLUME_LABEL}={self.home_volume}",
+                "--label",
+                f"{MOUNTS_LABEL}={self.mount_label()}",
                 "--user",
                 ROOT_USER,
                 "-v",
@@ -829,7 +774,7 @@ class DevBox:
                 f"{self.home_volume}:/home/dev",
                 *self.ssh_args(),
                 *self.container_env_args,
-                *self.opencode_config_mount_args(),
+                *self.custom_mount_args(),
                 *self.agent_port_args(),
                 *self.wireguard_args(),
                 "-w",
@@ -940,22 +885,20 @@ class DevBox:
         print("    labels:")
         print('      org.alexn.devbox: "true"')
         print(f"      {HOME_VOLUME_LABEL}: {yaml_quote(self.home_volume)}")
+        print(f"      {MOUNTS_LABEL}: {yaml_quote(self.mount_label())}")
 
         self.compose_environment()
         self.compose_mounts()
 
     def compose_environment(self):
-        auth_envs = configured_auth_envs()
-        if not (auth_envs or self.opencode_config_host_dir or self.wireguard_enabled() or has_ssh_auth_sock()):
+        environment = configured_container_envs()
+        if not (environment or self.wireguard_enabled() or has_ssh_auth_sock()):
             return
 
         print("    environment:")
 
-        for target, (source, _) in auth_envs.items():
+        for source, target, _ in environment:
             print(f'      {target}: "${{{source}}}"')
-
-        if self.opencode_config_host_dir:
-            print(f"      OPENCODE_CONFIG_DIR: {yaml_quote(OPENCODE_CONFIG_CONTAINER_DIR)}")
 
         if self.wireguard_enabled():
             print(f"      DEVBOX_WIREGUARD_MTU: {yaml_quote(self.wireguard_mtu)}")
@@ -974,10 +917,16 @@ class DevBox:
         print("        source: home")
         print("        target: /home/dev")
 
-        if self.opencode_config_host_dir:
+        for mount in self.mounts:
+            if mount.options not in {"", "ro", "rw"}:
+                raise SystemExit(
+                    f"Mount options cannot be represented in Compose: {mount.original}"
+                )
             print("      - type: bind")
-            print('        source: "${DEVBOX_OPENCODE_CONFIG_DIR}"')
-            print(f"        target: {yaml_quote(OPENCODE_CONFIG_CONTAINER_DIR)}")
+            print(f"        source: {yaml_quote(mount.source)}")
+            print(f"        target: {yaml_quote(mount.target)}")
+            if mount.options == "ro":
+                print("        read_only: true")
 
         if self.wireguard_config_host_path:
             print("      - type: bind")
@@ -1144,13 +1093,13 @@ Environment:
   DEVBOX_AGENT_PORT                 Host port for container port 10012; `start` defaults to {DEFAULT_AGENT_PORT}.
   DEVBOX_HOME_VOLUME                Shared /home/dev volume name. Defaults to {HOME_VOLUME_NAME}.
   DEVBOX_HOME_VOLUME_PREFIX         Legacy per-workspace /home/dev volume prefix removed by purge-all. Defaults to {LEGACY_HOME_VOLUME_PREFIX}.
-  DEVBOX_OPENCODE_CONFIG_DIR        Optional host config directory mounted read-write; sets OPENCODE_CONFIG_DIR={OPENCODE_CONFIG_CONTAINER_DIR} inside the container.
   DEVBOX_WIREGUARD_CONFIG_PATH      Optional path to a WireGuard configuration file. Mutually exclusive with DEVBOX_WIREGUARD_CONFIG_STR.
   DEVBOX_WIREGUARD_CONFIG_STR       Optional WireGuard configuration string written to a file inside the container. Mutually exclusive with DEVBOX_WIREGUARD_CONFIG_PATH.
   DEVBOX_WIREGUARD_MTU              Tunnel MTU used when WireGuard is enabled. Defaults to 1420; lower it if large transfers stall. Valid range: 576-9000.
 
-Environment forwarded to OpenCode:
-{auth_environment_help()}
+Environment forwarding:
+  Every valid DEVBOX_* variable not listed above is forwarded after removing DEVBOX_.
+  Empty values are forwarded. DEVBOX_NAME becomes NAME. DEVBOX_AUTH_* has no special handling.
 """
 
 
@@ -1163,6 +1112,14 @@ def build_parser():
 
     def add_project_command(name, help_text):
         command_parser = subparsers.add_parser(name, help=help_text, description=help_text)
+        command_parser.add_argument(
+            "--mount",
+            dest="mounts",
+            action="append",
+            default=[],
+            metavar="HOST:CONTAINER[:OPTIONS]",
+            help="Bind-mount an existing host file or directory. Repeatable; ~ is not expanded.",
+        )
         command_parser.add_argument("project_directory")
         return command_parser
 
@@ -1230,7 +1187,7 @@ def build_parser():
     subparsers.add_parser(
         "help-env",
         help="Show list of supported environment variables.",
-        description="Show list of supported environment variables, including DEVBOX_AUTH_* forwarding variables.",
+        description="Show list of supported environment variables and DEVBOX_* forwarding behavior.",
     )
 
     return parser
@@ -1252,7 +1209,9 @@ def create_devbox(namespace, container_cli):
             if candidate.startswith((".", os.path.sep, "~")):
                 execution_dir = command_args.pop(0)
 
-    return DevBox(namespace.command, project_dir, command_args, container_cli, execution_dir)
+    devbox = DevBox(namespace.command, project_dir, command_args, container_cli, execution_dir)
+    devbox.mounts = parse_mounts(getattr(namespace, "mounts", []))
+    return devbox
 
 
 def dispatch(devbox):
@@ -1306,7 +1265,6 @@ def main(argv=None):
     devbox = create_devbox(namespace, container_cli)
 
     if namespace.command in {"start", "restart", "shell", "exec", "compose", "agent", "agent-serve"}:
-        devbox.configure_opencode_config_mount()
         devbox.configure_wireguard()
 
     devbox.configure_agent_port()

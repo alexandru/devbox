@@ -1,13 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-opencode_config_dir="${OPENCODE_CONFIG_DIR:-/opt/opencode-config}"
-
-case ":$PATH:" in
-    *":$opencode_config_dir/bin:"*) ;;
-    *) export PATH="$opencode_config_dir/bin:$PATH" ;;
-esac
-
 if [[ "$(id -u)" == 0 && -n "${DEVBOX_WIREGUARD_CONFIG_STR:-}" ]]; then
     install -d -m 700 /etc/wireguard
     printf '%s' "$DEVBOX_WIREGUARD_CONFIG_STR" > /etc/wireguard/devbox.conf

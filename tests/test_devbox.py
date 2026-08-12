@@ -3,6 +3,7 @@ import json
 import os
 import runpy
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -66,6 +67,14 @@ class HelperTest(unittest.TestCase):
             r"RUN rm -rf /tmp/opencode && \\\s+mkdir -p /tmp/opencode && \\\s+chown dev:dev /tmp/opencode\s+WORKDIR /home/dev\s+USER dev",
         )
 
+    def test_dockerfile_installs_and_verifies_opencode2(self):
+        dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
+
+        self.assertIn("https://raw.githubusercontent.com/anomalyco/opencode/v2/install", dockerfile)
+        self.assertIn("bash -s -- --no-modify-path", dockerfile)
+        self.assertIn("opencode2 --version", dockerfile)
+        self.assertIn("/usr/local/bin/opencode2", dockerfile)
+
     def test_path_is_within_includes_parent_and_children_but_not_siblings(self):
         path_is_within = DEVBOX["path_is_within"]
 
@@ -116,17 +125,87 @@ class HelperTest(unittest.TestCase):
             self.assertEqual(find_container_cli(), "/usr/bin/docker")
             self.assertEqual([call.args[0] for call in which.call_args_list], ["wslc.exe", "wslc", "docker"])
 
-    def test_configured_auth_envs_ignores_empty_values(self):
-        configured_auth_envs = DEVBOX["configured_auth_envs"]
+    def test_configured_container_envs_forwards_non_reserved_names_in_source_order(self):
+        configured_container_envs = DEVBOX["configured_container_envs"]
         with mock.patch.dict(
             os.environ,
-            {"DEVBOX_AUTH_OPENAI_API_KEY": "secret", "DEVBOX_AUTH_ANTHROPIC_API_KEY": ""},
+            {
+                "DEVBOX_Z_TOKEN": "last",
+                "DEVBOX_EMPTY": "",
+                "DEVBOX_IMAGE": "ignored",
+                "DEVBOX_AGENT_PORT": "ignored",
+                "DEVBOX_HOME_VOLUME": "ignored",
+                "DEVBOX_HOME_VOLUME_PREFIX": "ignored",
+                "DEVBOX_WIREGUARD_CONFIG_PATH": "ignored",
+                "DEVBOX_WIREGUARD_CONFIG_STR": "ignored",
+                "DEVBOX_WIREGUARD_MTU": "ignored",
+                "DEVBOX_NAME": "workspace",
+                "DEVBOX_OPENCODE_CONFIG_DIR": "/config",
+                "DEVBOX_AUTH_TOKEN": "compatibility-is-gone",
+                "OTHER": "ignored",
+            },
             clear=True,
         ):
             self.assertEqual(
-                configured_auth_envs(),
-                {"OPENAI_API_KEY": ("DEVBOX_AUTH_OPENAI_API_KEY", "secret")},
+                configured_container_envs(),
+                [
+                    ("DEVBOX_AUTH_TOKEN", "AUTH_TOKEN", "compatibility-is-gone"),
+                    ("DEVBOX_EMPTY", "EMPTY", ""),
+                    ("DEVBOX_NAME", "NAME", "workspace"),
+                    ("DEVBOX_OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_DIR", "/config"),
+                    ("DEVBOX_Z_TOKEN", "Z_TOKEN", "last"),
+                ],
             )
+
+    def test_configured_container_envs_rejects_invalid_suffix(self):
+        configured_container_envs = DEVBOX["configured_container_envs"]
+
+        with mock.patch.dict(os.environ, {"DEVBOX_BAD-NAME": "value"}, clear=True):
+            with self.assertRaisesRegex(SystemExit, "DEVBOX_BAD-NAME"):
+                configured_container_envs()
+
+    def test_parse_mount_accepts_existing_file_directory_and_ro(self):
+        parse_mounts = DEVBOX["parse_mounts"]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_dir = Path(temp_dir) / "source with spaces"
+            source_dir.mkdir()
+            source_file = source_dir / "config.txt"
+            source_file.write_text("config")
+            mounts = parse_mounts(
+                [
+                    f"{source_dir}:/home/dev/data:ro",
+                    f"{source_file}:/home/dev/config.txt",
+                ]
+            )
+
+            self.assertEqual(mounts[0].source, str(source_dir.resolve()))
+            self.assertEqual(mounts[1].source, str(source_file.resolve()))
+
+        self.assertEqual(mounts[0].target, "/home/dev/data")
+        self.assertEqual(mounts[0].options, "ro")
+
+    def test_parse_mount_handles_windows_drive_paths(self):
+        parse_mounts = DEVBOX["parse_mounts"]
+        globals_ = parse_mounts.__globals__
+
+        with mock.patch.dict(globals_, {"canonical_mount_source": lambda path: path}):
+            mounts = parse_mounts([r"C:\Users\alex:/home/dev/data:ro"])
+
+        self.assertEqual(mounts[0].source, r"C:\Users\alex")
+        self.assertEqual(mounts[0].target, "/home/dev/data")
+        self.assertEqual(mounts[0].options, "ro")
+
+    def test_parse_mount_rejects_invalid_sources_targets_and_duplicates(self):
+        parse_mounts = DEVBOX["parse_mounts"]
+
+        with self.assertRaisesRegex(SystemExit, "source does not exist"):
+            parse_mounts(["/not/a/source:/home/dev/data"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(SystemExit, "absolute"):
+                parse_mounts([f"{temp_dir}:relative"])
+            with self.assertRaisesRegex(SystemExit, "Duplicate mount target"):
+                parse_mounts([f"{temp_dir}:/home/dev/data", f"{temp_dir}:/home/dev/data"])
 
 
 class InspectTest(unittest.TestCase):
@@ -229,20 +308,86 @@ class ConfigurationTest(unittest.TestCase):
                     instance.configure_agent_port()
                     self.assertEqual(instance.agent_port, "10012")
 
-    def test_auth_and_opencode_environment_arguments_are_forwarded(self):
+    def test_generic_environment_arguments_include_empty_values(self):
         instance = new_devbox()
-        instance.opencode_config_host_dir = "/config"
         globals_ = instance.configure_container_env_args.__globals__
 
         with mock.patch.dict(
-            globals_, {"configured_auth_envs": lambda: {"TOKEN": ("DEVBOX_AUTH_TOKEN", "secret")}}
+            globals_,
+            {
+                "configured_container_envs": lambda: [
+                    ("DEVBOX_EMPTY", "EMPTY", ""),
+                    ("DEVBOX_TOKEN", "TOKEN", "secret"),
+                ]
+            },
         ):
             instance.configure_container_env_args()
 
         self.assertEqual(
             instance.container_env_args,
-            ["-e", "TOKEN=secret", "-e", "OPENCODE_CONFIG_DIR=/opt/opencode-config"],
+            ["-e", "EMPTY=", "-e", "TOKEN=secret"],
         )
+
+    def test_compose_forwards_variable_references_without_values(self):
+        instance = new_devbox("compose")
+        globals_ = instance.compose_environment.__globals__
+
+        with mock.patch.dict(
+            globals_,
+            {
+                "configured_container_envs": lambda: [
+                    ("DEVBOX_EMPTY", "EMPTY", ""),
+                    ("DEVBOX_TOKEN", "TOKEN", "secret"),
+                ]
+            },
+        ), mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            instance.compose_environment()
+
+        output = stdout.getvalue()
+        self.assertIn('EMPTY: "${DEVBOX_EMPTY}"', output)
+        self.assertIn('TOKEN: "${DEVBOX_TOKEN}"', output)
+        self.assertNotIn("secret", output)
+
+    def test_compose_prints_structured_custom_mount_with_read_only(self):
+        mount = DEVBOX["Mount"]("/host data:/home/dev/data:ro", "/host data", "/home/dev/data", "ro")
+        instance = new_devbox("compose")
+        instance.mounts = [mount]
+
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            instance.compose_mounts()
+
+        output = stdout.getvalue()
+        self.assertIn('source: "/host data"', output)
+        self.assertIn('target: "/home/dev/data"', output)
+        self.assertIn("read_only: true", output)
+
+    def test_compose_represent_explicit_read_write_mount(self):
+        mount = DEVBOX["Mount"]("/host:/home/dev/data:rw", "/host", "/home/dev/data", "rw")
+        instance = new_devbox("compose")
+        instance.mounts = [mount]
+
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            instance.compose_mounts()
+
+        self.assertNotIn("read_only", stdout.getvalue())
+
+    def test_compose_rejects_mount_options_it_cannot_represent(self):
+        mount = DEVBOX["Mount"]("/host:/home/dev/data:z", "/host", "/home/dev/data", "z")
+        instance = new_devbox("compose")
+        instance.mounts = [mount]
+
+        with mock.patch("sys.stdout", new_callable=io.StringIO):
+            with self.assertRaisesRegex(SystemExit, "cannot be represented in Compose"):
+                instance.compose_mounts()
+
+    def test_compose_mounts_include_custom_mount_label(self):
+        instance = new_devbox("compose")
+        instance.mounts = [DEVBOX["Mount"]("/host:/data", "/host", "/data", "")]
+
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            instance.compose_service()
+
+        self.assertIn(DEVBOX["MOUNTS_LABEL"], stdout.getvalue())
 
     def test_wireguard_is_disabled_without_configuration(self):
         instance = new_devbox()
@@ -381,9 +526,58 @@ class ConfigurationTest(unittest.TestCase):
 
         self.assertIn('printf \'%s\' "$DEVBOX_WIREGUARD_CONFIG_STR"', entrypoint)
         self.assertIn("/etc/wireguard/devbox.conf", entrypoint)
+        self.assertNotIn("OPENCODE_CONFIG_DIR", entrypoint)
 
 
 class ContainerExecutionTest(unittest.TestCase):
+    def test_custom_mounts_add_canonical_label_and_runtime_volume_arguments(self):
+        mount = DEVBOX["Mount"]("/host:/home/dev/data:ro", "/host", "/home/dev/data", "ro")
+        instance = new_devbox(container_cli="docker")
+        instance.project_mount_dir = "/project"
+        instance.project_container_mount_dir = "/project"
+        instance.project_container_dir = "/project"
+        instance.mounts = [mount]
+
+        with mock.patch.object(instance, "run_cli") as run_cli:
+            instance.run_new_container()
+
+        command = run_cli.call_args.args[0]
+        self.assertIn(f'{DEVBOX["MOUNTS_LABEL"]}={instance.mount_label()}', command)
+        self.assertIn("/host:/home/dev/data:ro", command)
+
+    def test_custom_mount_label_accepts_equal_and_legacy_empty_configuration(self):
+        mount = DEVBOX["Mount"]("/host:/home/dev/data", "/host", "/home/dev/data", "")
+        other_mount = DEVBOX["Mount"]("/other:/home/dev/other", "/other", "/home/dev/other", "ro")
+        instance = new_devbox(container_cli="docker")
+        instance.mounts = [mount, other_mount]
+        container = {"Config": {"Labels": {DEVBOX["MOUNTS_LABEL"]: instance.mount_label()}}}
+
+        with mock.patch.object(instance, "container_inspect", return_value=container):
+            instance.ensure_custom_mounts()
+
+        instance.mounts.reverse()
+        with mock.patch.object(instance, "container_inspect", return_value=container):
+            instance.ensure_custom_mounts()
+
+        instance.mounts = []
+        with mock.patch.object(instance, "container_inspect", return_value={"Config": {"Labels": {}}}):
+            instance.ensure_custom_mounts()
+
+    def test_custom_mount_label_mismatch_requires_purge(self):
+        mount = DEVBOX["Mount"]("/host:/home/dev/data", "/host", "/home/dev/data", "")
+        instance = new_devbox(container_cli="docker")
+        instance.mounts = [mount]
+
+        with mock.patch.object(
+            instance,
+            "container_inspect",
+            return_value={"Config": {"Labels": {DEVBOX["MOUNTS_LABEL"]: "[]"}}},
+        ), mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            with self.assertRaisesRegex(SystemExit, "1"):
+                instance.ensure_custom_mounts()
+
+        self.assertIn("purge", stderr.getvalue())
+
     def test_project_mount_accepts_docker_desktop_macos_source(self):
         instance = new_devbox(container_cli="docker")
         instance.project_mount_dir = "/Users/alex/Developer"
@@ -554,6 +748,16 @@ class ParserTest(unittest.TestCase):
 
         self.assertEqual(namespace.command, "start")
         self.assertEqual(namespace.project_directory, ".")
+
+    def test_start_and_compose_parse_repeated_mount_options(self):
+        parser = DEVBOX["build_parser"]()
+
+        for command in ("start", "compose"):
+            with self.subTest(command=command):
+                namespace = parser.parse_args(
+                    [command, "--mount", "/one:/home/dev/one", "--mount", "/two:/home/dev/two:ro", "."]
+                )
+                self.assertEqual(namespace.mounts, ["/one:/home/dev/one", "/two:/home/dev/two:ro"])
 
     def test_exec_preserves_passthrough_arguments(self):
         namespace = DEVBOX["build_parser"]().parse_args(["exec", "python", "-c", "print('ok')"])
