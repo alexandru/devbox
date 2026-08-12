@@ -112,7 +112,7 @@ RUN rm -rf /tmp/opencode && \
 
 USER dev
 RUN cs install --contrib cellar && \
-    cellar telemetry disable
+    HOME="/home/dev" cellar telemetry disable
 
 WORKDIR /home/dev
 VOLUME ["/home/dev"]
