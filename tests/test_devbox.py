@@ -50,6 +50,22 @@ class HelperTest(unittest.TestCase):
             with self.subTest(candidate=candidate):
                 self.assertIn(f"sdk install {candidate}", dockerfile)
 
+    def test_dockerfile_disables_cellar_telemetry_as_dev_user(self):
+        dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
+
+        self.assertRegex(
+            dockerfile,
+            r"USER dev\s+RUN cs install --contrib cellar && \\\s+cellar telemetry disable",
+        )
+
+    def test_dockerfile_recreates_opencode_temp_directory_for_dev(self):
+        dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
+
+        self.assertRegex(
+            dockerfile,
+            r"RUN rm -rf /tmp/opencode && \\\s+mkdir -p /tmp/opencode && \\\s+chown dev:dev /tmp/opencode\s+USER dev",
+        )
+
     def test_path_is_within_includes_parent_and_children_but_not_siblings(self):
         path_is_within = DEVBOX["path_is_within"]
 

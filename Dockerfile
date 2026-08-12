@@ -106,8 +106,13 @@ RUN chmod 0755 /usr/local/bin/devbox-entrypoint /usr/local/bin/osc52-clipboard /
     mkdir -p /home/dev/.config/opencode && \
     chown -R dev:dev /home/dev/.config
 
+RUN rm -rf /tmp/opencode && \
+    mkdir -p /tmp/opencode && \
+    chown dev:dev /tmp/opencode
+
 USER dev
-RUN cs install --contrib cellar
+RUN cs install --contrib cellar && \
+    cellar telemetry disable
 
 WORKDIR /home/dev
 VOLUME ["/home/dev"]
