@@ -63,7 +63,7 @@ class HelperTest(unittest.TestCase):
 
         self.assertRegex(
             dockerfile,
-            r"RUN rm -rf /tmp/opencode && \\\s+mkdir -p /tmp/opencode && \\\s+chown dev:dev /tmp/opencode\s+USER dev",
+            r"RUN rm -rf /tmp/opencode && \\\s+mkdir -p /tmp/opencode && \\\s+chown dev:dev /tmp/opencode\s+WORKDIR /home/dev\s+USER dev",
         )
 
     def test_path_is_within_includes_parent_and_children_but_not_siblings(self):
