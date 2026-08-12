@@ -110,11 +110,11 @@ RUN rm -rf /tmp/opencode && \
     mkdir -p /tmp/opencode && \
     chown dev:dev /tmp/opencode
 
+WORKDIR /home/dev
 USER dev
 RUN cs install --contrib cellar && \
-    HOME="/home/dev" cellar telemetry disable
+    cellar telemetry disable
 
-WORKDIR /home/dev
 VOLUME ["/home/dev"]
 EXPOSE 10012
 ENTRYPOINT ["/usr/local/bin/devbox-entrypoint"]

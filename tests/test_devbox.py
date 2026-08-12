@@ -55,7 +55,7 @@ class HelperTest(unittest.TestCase):
 
         self.assertRegex(
             dockerfile,
-            r'USER dev\s+RUN cs install --contrib cellar && \\\n+    HOME="/home/dev" cellar telemetry disable',
+            r"WORKDIR /home/dev\s+USER dev\s+RUN cs install --contrib cellar && \\\n+    cellar telemetry disable",
         )
 
     def test_dockerfile_recreates_opencode_temp_directory_for_dev(self):
