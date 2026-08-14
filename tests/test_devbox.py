@@ -42,6 +42,7 @@ class HelperTest(unittest.TestCase):
         dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
 
         self.assertNotIn("\nSHELL ", dockerfile)
+        self.assertIn("ENV SHELL=/bin/bash", dockerfile)
 
     def test_dockerfile_installs_jvm_build_tools_with_sdkman(self):
         dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
@@ -56,16 +57,20 @@ class HelperTest(unittest.TestCase):
 
         self.assertRegex(
             dockerfile,
-            r"WORKDIR /home/dev\s+USER dev\s+RUN cs install --contrib cellar && \\\n+    cellar telemetry disable",
+            r"USER dev[\s\S]+RUN cs install --contrib cellar && \\\n+    cellar telemetry disable",
         )
 
-    def test_dockerfile_recreates_opencode_temp_directory_for_dev(self):
+    def test_dockerfile_installs_opencode_as_dev_in_home(self):
         dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
 
         self.assertRegex(
             dockerfile,
-            r"RUN rm -rf /tmp/opencode && \\\s+mkdir -p /tmp/opencode && \\\s+chown dev:dev /tmp/opencode\s+WORKDIR /home/dev\s+USER dev",
+            r"USER dev\s+RUN curl -fsSL https://opencode.ai/install",
         )
+        self.assertIn("/home/dev/.opencode/bin", dockerfile)
+        self.assertNotIn("opencode-home", dockerfile)
+        self.assertNotIn("/usr/local/bin/opencode", dockerfile)
+        self.assertIn('/usr/local/share/devbox/bin/opencode', dockerfile)
 
     def test_dockerfile_installs_and_verifies_opencode2(self):
         dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
@@ -73,7 +78,34 @@ class HelperTest(unittest.TestCase):
         self.assertIn("https://raw.githubusercontent.com/anomalyco/opencode/v2/install", dockerfile)
         self.assertIn("bash -s -- --no-modify-path", dockerfile)
         self.assertIn("opencode2 --version", dockerfile)
-        self.assertIn("/usr/local/bin/opencode2", dockerfile)
+        self.assertIn("/home/dev/.opencode/bin", dockerfile)
+
+    def test_dockerfile_defines_opencode2_alias(self):
+        dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
+        devboxrc = (Path(__file__).parents[1] / "home" / ".devboxrc").read_text()
+        installer = (Path(__file__).parents[1] / "bin" / "devbox-install-user-files").read_text()
+
+        self.assertNotIn("/etc/bash.bashrc", dockerfile)
+        self.assertIn("COPY home/.devboxrc", dockerfile)
+        self.assertIn("alias oc='command opencode2'", devboxrc)
+        self.assertIn('source "$SDKMAN_DIR/bin/sdkman-init.sh"', devboxrc)
+        self.assertIn("grep -Fqx", installer)
+        self.assertIn('source "$HOME/.devboxrc"', installer)
+
+    def test_update_all_attempts_both_official_opencode_updates(self):
+        script = (Path(__file__).parents[1] / "bin" / "update-all").read_text()
+
+        self.assertIn("opencode upgrade --method curl", script)
+        self.assertIn("https://opencode.ai/install", script)
+        self.assertIn("https://raw.githubusercontent.com/anomalyco/opencode/v2/install", script)
+        self.assertIn("bash -s -- --no-modify-path", script)
+        self.assertIn("sudo apt update && sudo apt upgrade -y", script)
+        self.assertIn('run_update "SDKMAN" sdk selfupdate', script)
+        self.assertIn('run_update "SDKMAN candidate metadata" sdk update', script)
+        self.assertIn('run_update "SDKMAN-managed tools" sdk upgrade', script)
+        self.assertIn("https://github.com/coursier/launchers/raw/master/coursier", script)
+        self.assertIn('run_update "Coursier" update_coursier', script)
+        self.assertIn('run_update "Coursier-managed applications" cs update', script)
 
     def test_path_is_within_includes_parent_and_children_but_not_siblings(self):
         path_is_within = DEVBOX["path_is_within"]
@@ -667,6 +699,30 @@ class ContainerExecutionTest(unittest.TestCase):
         self.assertEqual(command[1:3], ["exec", "-it"])
         self.assertEqual(command[-2:], ["/usr/local/bin/devbox-entrypoint", "bash"])
         execvp.assert_not_called()
+
+    def test_agent_runs_opencode2_in_interactive_bash(self):
+        instance = new_devbox(
+            "agent",
+            command_args=["--model", "test model"],
+            execution_dir="src",
+        )
+
+        with mock.patch.object(instance, "assert_container_running"), mock.patch.object(
+            instance, "container_directory", return_value="/workspace/src"
+        ), mock.patch.object(instance, "exec_container") as exec_container:
+            instance.agent()
+
+        self.assertEqual(instance.execution_dir, "/workspace/src")
+        exec_container.assert_called_once_with(
+            [
+                "bash",
+                "-ic",
+                'exec opencode2 "$@"',
+                "bash",
+                "--model",
+                "test model",
+            ]
+        )
 
 
 class StatusTest(unittest.TestCase):

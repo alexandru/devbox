@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+home=/home/dev
+bashrc="$home/.bashrc"
+devboxrc_source='[ -f "$HOME/.devboxrc" ] && source "$HOME/.devboxrc"'
+
+install -d -o dev -g dev -m 0755 "$home/bin"
+install -o dev -g dev -m 0755 /usr/local/share/devbox/update-all "$home/bin/update-all"
+install -o dev -g dev -m 0644 /usr/local/share/devbox/devboxrc "$home/.devboxrc"
+
+opencode_bin="$home/.opencode/bin"
+install -d -o dev -g dev -m 0755 "$opencode_bin"
+for binary in opencode opencode2; do
+    if [[ ! -x "$opencode_bin/$binary" && -x "/usr/local/share/devbox/bin/$binary" ]]; then
+        install -o dev -g dev -m 0755 "/usr/local/share/devbox/bin/$binary" "$opencode_bin/$binary"
+    fi
+done
+
+touch "$bashrc"
+if ! grep -Fqx "$devboxrc_source" "$bashrc"; then
+    printf '\n%s\n' "$devboxrc_source" >> "$bashrc"
+fi
+chown dev:dev "$bashrc"

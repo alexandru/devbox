@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "$(id -u)" == 0 ]]; then
+    devbox-install-user-files
+fi
+
 if [[ "$(id -u)" == 0 && -n "${DEVBOX_WIREGUARD_CONFIG_STR:-}" ]]; then
     install -d -m 700 /etc/wireguard
     printf '%s' "$DEVBOX_WIREGUARD_CONFIG_STR" > /etc/wireguard/devbox.conf

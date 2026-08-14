@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+status=0
+
+run_update() {
+    local name="$1"
+    shift
+
+    echo
+    echo "Updating $name..."
+    if ! "$@"; then
+        echo "$name update failed." >&2
+        status=1
+    fi
+}
+
+update_system_packages() {
+    sudo apt update && sudo apt upgrade -y
+}
+
+update_coursier() {
+    local launcher
+    local result
+
+    launcher="$(mktemp)"
+    if curl -fLo "$launcher" https://github.com/coursier/launchers/raw/master/coursier; then
+        sudo install -m 0755 "$launcher" /usr/local/bin/cs
+        result=$?
+    else
+        result=$?
+    fi
+    rm -f "$launcher"
+    return "$result"
+}
+
+update_opencode_v1() {
+    if command -v opencode >/dev/null; then
+        opencode upgrade --method curl
+    else
+        curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path
+    fi
+}
+
+update_opencode_v2() {
+    curl -fsSL https://raw.githubusercontent.com/anomalyco/opencode/v2/install \
+        | bash -s -- --no-modify-path && \
+        opencode2 --version
+}
+
+run_update "system packages" update_system_packages
+
+if source "$SDKMAN_DIR/bin/sdkman-init.sh"; then
+    run_update "SDKMAN" sdk selfupdate
+    run_update "SDKMAN candidate metadata" sdk update
+    run_update "SDKMAN-managed tools" sdk upgrade
+else
+    echo "SDKMAN initialization failed." >&2
+    status=1
+fi
+
+run_update "Coursier" update_coursier
+run_update "Coursier-managed applications" cs update
+run_update "OpenCode V1" update_opencode_v1
+run_update "OpenCode V2" update_opencode_v2
+
+exit "$status"

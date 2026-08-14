@@ -848,7 +848,7 @@ class DevBox:
     def agent(self):
         self.assert_container_running()
         self.execution_dir = self.container_directory(self.execution_dir or os.curdir)
-        self.exec_container(["opencode", *self.command_args])
+        self.exec_container(["bash", "-ic", 'exec opencode2 "$@"', "bash", *self.command_args])
 
     def agent_serve(self):
         self.assert_container_running()
@@ -1162,7 +1162,7 @@ def build_parser():
 
     agent_parser = add_passthrough_command(
         "agent",
-        "Start opencode in the running devbox at a workspace directory.",
+        "Start opencode2 in the running devbox at a workspace directory.",
     )
     agent_parser.add_argument(
         "-C",
