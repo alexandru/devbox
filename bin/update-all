@@ -8,7 +8,9 @@ run_update() {
     shift
 
     echo
+    echo "-----------------------------------------------------"
     echo "Updating $name..."
+    echo "-----------------------------------------------------"
     if ! "$@"; then
         echo "$name update failed." >&2
         status=1
@@ -50,7 +52,12 @@ update_opencode_v2() {
 
 run_update "system packages" update_system_packages
 
-if source "$SDKMAN_DIR/bin/sdkman-init.sh"; then
+set +u
+source "$SDKMAN_DIR/bin/sdkman-init.sh"
+sdkman_init_status=$?
+set -u
+
+if ((sdkman_init_status == 0)); then
     run_update "SDKMAN" sdk selfupdate
     run_update "SDKMAN candidate metadata" sdk update
     run_update "SDKMAN-managed tools" sdk upgrade

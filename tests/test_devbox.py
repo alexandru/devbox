@@ -107,6 +107,39 @@ class HelperTest(unittest.TestCase):
         self.assertIn('run_update "Coursier" update_coursier', script)
         self.assertIn('run_update "Coursier-managed applications" cs update', script)
 
+    def test_update_all_initializes_sdkman_when_its_script_is_not_nounset_safe(self):
+        update_all = Path(__file__).parents[1] / "bin" / "update-all"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sdkman_bin = root / "sdkman" / "bin"
+            command_bin = root / "bin"
+            sdkman_bin.mkdir(parents=True)
+            command_bin.mkdir()
+
+            (sdkman_bin / "sdkman-init.sh").write_text(
+                ': "${ZSH_VERSION}"\n'
+                "sdk() { return 0; }\n"
+            )
+            for command in ("sudo", "curl", "cs", "opencode", "opencode2"):
+                executable = command_bin / command
+                executable.write_text("#!/usr/bin/env bash\nexit 0\n")
+                executable.chmod(0o755)
+
+            result = subprocess.run(
+                ["bash", str(update_all)],
+                capture_output=True,
+                env={
+                    **os.environ,
+                    "PATH": f"{command_bin}:{os.environ['PATH']}",
+                    "SDKMAN_DIR": str(root / "sdkman"),
+                },
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("unbound variable", result.stderr)
+
     def test_path_is_within_includes_parent_and_children_but_not_siblings(self):
         path_is_within = DEVBOX["path_is_within"]
 
@@ -626,8 +659,8 @@ class ContainerExecutionTest(unittest.TestCase):
         }
 
         with mock.patch.object(DEVBOX["sys"], "platform", "darwin"), mock.patch.object(
-            instance, "container_inspect", return_value=container
-        ):
+            DEVBOX["os"].path, "realpath", side_effect=lambda path: path
+        ), mock.patch.object(instance, "container_inspect", return_value=container):
             instance.ensure_project_mount()
 
     def test_project_mount_mismatch_reports_running_and_current_configuration(self):
