@@ -58,9 +58,10 @@ sdkman_init_status=$?
 set -u
 
 if ((sdkman_init_status == 0)); then
-    run_update "SDKMAN" sdk selfupdate
+    set +u
     run_update "SDKMAN candidate metadata" sdk update
     run_update "SDKMAN-managed tools" sdk upgrade
+    set -u
 else
     echo "SDKMAN initialization failed." >&2
     status=1

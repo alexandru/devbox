@@ -100,14 +100,13 @@ class HelperTest(unittest.TestCase):
         self.assertIn("https://raw.githubusercontent.com/anomalyco/opencode/v2/install", script)
         self.assertIn("bash -s -- --no-modify-path", script)
         self.assertIn("sudo apt update && sudo apt upgrade -y", script)
-        self.assertIn('run_update "SDKMAN" sdk selfupdate', script)
         self.assertIn('run_update "SDKMAN candidate metadata" sdk update', script)
         self.assertIn('run_update "SDKMAN-managed tools" sdk upgrade', script)
         self.assertIn("https://github.com/coursier/launchers/raw/master/coursier", script)
         self.assertIn('run_update "Coursier" update_coursier', script)
         self.assertIn('run_update "Coursier-managed applications" cs update', script)
 
-    def test_update_all_initializes_sdkman_when_its_script_is_not_nounset_safe(self):
+    def test_update_all_supports_nounset_unsafe_sdkman_ci_installation(self):
         update_all = Path(__file__).parents[1] / "bin" / "update-all"
 
         with tempfile.TemporaryDirectory() as directory:
@@ -116,10 +115,12 @@ class HelperTest(unittest.TestCase):
             command_bin = root / "bin"
             sdkman_bin.mkdir(parents=True)
             command_bin.mkdir()
+            sdk_call_log = root / "sdk-calls"
 
             (sdkman_bin / "sdkman-init.sh").write_text(
                 ': "${ZSH_VERSION}"\n'
-                "sdk() { return 0; }\n"
+                "sdkman_selfupdate_feature=false\n"
+                'sdk() { printf "%s\\n" "$1" >> "$SDK_CALL_LOG"; : "$2"; }\n'
             )
             for command in ("sudo", "curl", "cs", "opencode", "opencode2"):
                 executable = command_bin / command
@@ -132,13 +133,16 @@ class HelperTest(unittest.TestCase):
                 env={
                     **os.environ,
                     "PATH": f"{command_bin}:{os.environ['PATH']}",
+                    "SDK_CALL_LOG": str(sdk_call_log),
                     "SDKMAN_DIR": str(root / "sdkman"),
                 },
                 text=True,
             )
+            sdk_calls = sdk_call_log.read_text().splitlines()
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("unbound variable", result.stderr)
+        self.assertEqual(sdk_calls, ["update", "upgrade"])
 
     def test_path_is_within_includes_parent_and_children_but_not_siblings(self):
         path_is_within = DEVBOX["path_is_within"]
