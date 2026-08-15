@@ -848,6 +848,11 @@ class DevBox:
     def agent(self):
         self.assert_container_running()
         self.execution_dir = self.container_directory(self.execution_dir or os.curdir)
+        self.exec_container(["bash", "-ic", 'exec opencode "$@"', "bash", *self.command_args])
+
+    def agent2(self):
+        self.assert_container_running()
+        self.execution_dir = self.container_directory(self.execution_dir or os.curdir)
         self.exec_container(["bash", "-ic", 'exec opencode2 "$@"', "bash", *self.command_args])
 
     def agent_serve(self):
@@ -1162,9 +1167,21 @@ def build_parser():
 
     agent_parser = add_passthrough_command(
         "agent",
-        "Start opencode2 in the running devbox at a workspace directory.",
+        "Start opencode (v1) in the running devbox at a workspace directory.",
     )
     agent_parser.add_argument(
+        "-C",
+        "--directory",
+        dest="execution_dir",
+        metavar="DIRECTORY",
+        help="Host directory under the workspace started by `start`; defaults to the current directory.",
+    )
+
+    agent2_parser = add_passthrough_command(
+        "agent2",
+        "Start opencode2 (v2) in the running devbox at a workspace directory.",
+    )
+    agent2_parser.add_argument(
         "-C",
         "--directory",
         dest="execution_dir",
@@ -1202,7 +1219,9 @@ def create_devbox(namespace, container_cli):
     execution_dir = getattr(namespace, "execution_dir", "")
     if namespace.command == "shell":
         execution_dir = namespace.directory
-    elif namespace.command == "agent" and not execution_dir:
+    elif namespace.command in {"agent", "agent2"} and not execution_dir:
+        execution_dir = os.curdir
+    else:
         command_args = list(command_args)
         if command_args and command_args[0] != "--":
             candidate = os.path.expanduser(command_args[0])
@@ -1227,6 +1246,7 @@ def dispatch(devbox):
         "exec": devbox.exec_command,
         "compose": devbox.compose_file,
         "agent": devbox.agent,
+        "agent2": devbox.agent2,
         "agent-serve": devbox.agent_serve,
         "purge": devbox.purge_container,
         "purge-all": devbox.purge_all,
@@ -1264,7 +1284,7 @@ def main(argv=None):
 
     devbox = create_devbox(namespace, container_cli)
 
-    if namespace.command in {"start", "restart", "shell", "exec", "compose", "agent", "agent-serve"}:
+    if namespace.command in {"start", "restart", "shell", "exec", "compose", "agent", "agent2", "agent-serve"}:
         devbox.configure_wireguard()
 
     devbox.configure_agent_port()

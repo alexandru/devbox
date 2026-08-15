@@ -80,14 +80,15 @@ class HelperTest(unittest.TestCase):
         self.assertIn("opencode2 --version", dockerfile)
         self.assertIn("/home/dev/.opencode/bin", dockerfile)
 
-    def test_dockerfile_defines_opencode2_alias(self):
+    def test_dockerfile_defines_opencode_aliases(self):
         dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
         devboxrc = (Path(__file__).parents[1] / "home" / ".devboxrc").read_text()
         installer = (Path(__file__).parents[1] / "bin" / "devbox-install-user-files").read_text()
 
         self.assertNotIn("/etc/bash.bashrc", dockerfile)
         self.assertIn("COPY home/.devboxrc", dockerfile)
-        self.assertIn("alias oc='command opencode2'", devboxrc)
+        self.assertIn("alias oc='command opencode'", devboxrc)
+        self.assertIn("alias oc2='command opencode2'", devboxrc)
         self.assertIn('source "$SDKMAN_DIR/bin/sdkman-init.sh"', devboxrc)
         self.assertIn("grep -Fqx", installer)
         self.assertIn('source "$HOME/.devboxrc"', installer)
@@ -737,7 +738,7 @@ class ContainerExecutionTest(unittest.TestCase):
         self.assertEqual(command[-2:], ["/usr/local/bin/devbox-entrypoint", "bash"])
         execvp.assert_not_called()
 
-    def test_agent_runs_opencode2_in_interactive_bash(self):
+    def test_agent_runs_opencode_in_interactive_bash(self):
         instance = new_devbox(
             "agent",
             command_args=["--model", "test model"],
@@ -748,6 +749,30 @@ class ContainerExecutionTest(unittest.TestCase):
             instance, "container_directory", return_value="/workspace/src"
         ), mock.patch.object(instance, "exec_container") as exec_container:
             instance.agent()
+
+        self.assertEqual(instance.execution_dir, "/workspace/src")
+        exec_container.assert_called_once_with(
+            [
+                "bash",
+                "-ic",
+                'exec opencode "$@"',
+                "bash",
+                "--model",
+                "test model",
+            ]
+        )
+
+    def test_agent2_runs_opencode2_in_interactive_bash(self):
+        instance = new_devbox(
+            "agent2",
+            command_args=["--model", "test model"],
+            execution_dir="src",
+        )
+
+        with mock.patch.object(instance, "assert_container_running"), mock.patch.object(
+            instance, "container_directory", return_value="/workspace/src"
+        ), mock.patch.object(instance, "exec_container") as exec_container:
+            instance.agent2()
 
         self.assertEqual(instance.execution_dir, "/workspace/src")
         exec_container.assert_called_once_with(
@@ -859,6 +884,12 @@ class ParserTest(unittest.TestCase):
 
     def test_agent_parses_execution_directory_and_passthrough_arguments(self):
         namespace = DEVBOX["build_parser"]().parse_args(["agent", "-C", "src", "--", "--model", "test"])
+
+        self.assertEqual(namespace.execution_dir, "src")
+        self.assertEqual(namespace.command_args, ["--", "--model", "test"])
+
+    def test_agent2_parses_execution_directory_and_passthrough_arguments(self):
+        namespace = DEVBOX["build_parser"]().parse_args(["agent2", "-C", "src", "--", "--model", "test"])
 
         self.assertEqual(namespace.execution_dir, "src")
         self.assertEqual(namespace.command_args, ["--", "--model", "test"])
