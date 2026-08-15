@@ -134,6 +134,13 @@ RUN curl -fsSL https://raw.githubusercontent.com/anomalyco/opencode/v2/install \
     | bash -s -- --no-modify-path && \
     opencode2 --version
 
+# Pre-create common JVM tool directories so mounted files don't force root-owned parent creation.
+RUN mkdir -p \
+    /home/dev/.sbt/1.0 \
+    /home/dev/.m2 \
+    /home/dev/.gradle \
+    /home/dev/.config/sbt/2
+
 # Keep image copies available to seed retained home volumes that predate user-scoped installation.
 USER root
 RUN install -d -m 0755 /usr/local/share/devbox/bin && \
