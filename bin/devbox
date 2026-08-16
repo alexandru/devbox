@@ -843,6 +843,8 @@ class DevBox:
 
     def exec_command(self):
         self.assert_container_running()
+        if self.execution_dir:
+            self.execution_dir = self.container_directory(self.execution_dir)
         self.exec_container(self.command_args)
 
     def compose_file(self):

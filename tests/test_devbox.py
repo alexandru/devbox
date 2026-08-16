@@ -727,6 +727,18 @@ class ContainerExecutionTest(unittest.TestCase):
         self.assertEqual(command[-2:], ["/usr/local/bin/devbox-entrypoint", "bash"])
         execvp.assert_not_called()
 
+    def test_exec_converts_requested_host_directory_to_container_directory(self):
+        instance = new_devbox("exec", command_args=["bash"], execution_dir=".")
+
+        with mock.patch.object(instance, "assert_container_running"), mock.patch.object(
+            instance, "container_directory", return_value="/workspace/project"
+        ) as container_directory, mock.patch.object(instance, "exec_container") as exec_container:
+            instance.exec_command()
+
+        container_directory.assert_called_once_with(".")
+        self.assertEqual(instance.execution_dir, "/workspace/project")
+        exec_container.assert_called_once_with(["bash"])
+
 
 class StatusTest(unittest.TestCase):
     def test_status_reports_missing_container(self):
