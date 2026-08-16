@@ -72,19 +72,6 @@ class HelperTest(unittest.TestCase):
         self.assertNotIn("/usr/local/bin/opencode", dockerfile)
         self.assertIn('/usr/local/share/devbox/bin/opencode', dockerfile)
 
-    def test_dockerfile_installs_copilot_as_dev_in_home(self):
-        dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
-        installer = (Path(__file__).parents[1] / "bin" / "devbox-install-user-files").read_text()
-
-        self.assertRegex(
-            dockerfile,
-            r"USER dev\s+RUN npm config set prefix '~/.local/' && \\\n+    npm install -g @github/copilot",
-        )
-        self.assertIn('copilot version', dockerfile)
-        self.assertIn('/home/dev/.local/bin', dockerfile)
-        self.assertIn('/usr/local/share/devbox/npm-global', dockerfile)
-        self.assertIn('copilot_seed=', installer)
-
     def test_dockerfile_defines_opencode_aliases(self):
         dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
         devboxrc = (Path(__file__).parents[1] / "home" / ".devboxrc").read_text()
@@ -108,9 +95,6 @@ class HelperTest(unittest.TestCase):
         self.assertIn("https://github.com/coursier/launchers/raw/master/coursier", script)
         self.assertIn('run_update "Coursier" update_coursier', script)
         self.assertIn('run_update "Coursier-managed applications" cs update', script)
-        self.assertIn('run_update "GitHub Copilot CLI" update_copilot', script)
-        self.assertIn("npm config set prefix '~/.local/'", script)
-        self.assertIn("npm install -g @github/copilot@latest", script)
 
     def test_update_all_supports_nounset_unsafe_sdkman_ci_installation(self):
         update_all = Path(__file__).parents[1] / "bin" / "update-all"
@@ -122,7 +106,6 @@ class HelperTest(unittest.TestCase):
             sdkman_bin.mkdir(parents=True)
             command_bin.mkdir()
             sdk_call_log = root / "sdk-calls"
-            npm_call_log = root / "npm-calls"
 
             (sdkman_bin / "sdkman-init.sh").write_text(
                 ': "${ZSH_VERSION}"\n'
@@ -133,10 +116,6 @@ class HelperTest(unittest.TestCase):
                 executable = command_bin / command
                 executable.write_text("#!/usr/bin/env bash\nexit 0\n")
                 executable.chmod(0o755)
-            (command_bin / "npm").write_text(
-                '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$NPM_CALL_LOG"\n'
-            )
-            (command_bin / "npm").chmod(0o755)
 
             result = subprocess.run(
                 ["bash", str(update_all)],
@@ -145,21 +124,15 @@ class HelperTest(unittest.TestCase):
                     **os.environ,
                     "PATH": f"{command_bin}:{os.environ['PATH']}",
                     "SDK_CALL_LOG": str(sdk_call_log),
-                    "NPM_CALL_LOG": str(npm_call_log),
                     "SDKMAN_DIR": str(root / "sdkman"),
                 },
                 text=True,
             )
             sdk_calls = sdk_call_log.read_text().splitlines()
-            npm_calls = npm_call_log.read_text().splitlines()
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("unbound variable", result.stderr)
         self.assertEqual(sdk_calls, ["update", "upgrade"])
-        self.assertEqual(
-            npm_calls,
-            ["config set prefix ~/.local/", "install -g @github/copilot@latest"],
-        )
 
     def test_path_is_within_includes_parent_and_children_but_not_siblings(self):
         path_is_within = DEVBOX["path_is_within"]

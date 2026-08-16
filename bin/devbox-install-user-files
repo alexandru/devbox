@@ -17,14 +17,6 @@ for binary in opencode; do
     fi
 done
 
-copilot_bin="$home/.local/bin"
-install -d -o dev -g dev -m 0755 "$copilot_bin"
-copilot_seed=/usr/local/share/devbox/npm-global
-if [[ ! -x "$copilot_bin/copilot" && -d "$copilot_seed" ]]; then
-    cp -a "$copilot_seed/." "$home/.local/"
-    chown -R dev:dev "$home/.local/bin/copilot" "$home/.local/lib/node_modules/@github"
-fi
-
 touch "$bashrc"
 if ! grep -Fqx "$devboxrc_source" "$bashrc"; then
     printf '\n%s\n' "$devboxrc_source" >> "$bashrc"

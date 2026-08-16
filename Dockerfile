@@ -98,7 +98,7 @@ RUN mkdir -p /workspaces /home/dev/.config && \
     chown -R dev:dev /opt/sdkman /workspaces /home/dev
 
 ENV HOME=/home/dev
-ENV PATH="/home/dev/bin:/home/dev/.opencode/bin:/home/dev/.local/bin:/home/dev/.local/share/coursier/bin:/usr/local/bin:${PATH}"
+ENV PATH="/home/dev/bin:/home/dev/.opencode/bin:/home/dev/.local/share/coursier/bin:/usr/local/bin:${PATH}"
 
 # Container helper scripts
 COPY bin/devbox-entrypoint /usr/local/bin/devbox-entrypoint
@@ -126,10 +126,6 @@ RUN ln -sf /usr/local/bin/osc52-clipboard /usr/local/bin/wl-copy && \
 WORKDIR /home/dev
 USER dev
 
-RUN npm config set prefix '~/.local/' && \
-    npm install -g @github/copilot && \
-    copilot version
-
 RUN curl -fsSL https://opencode.ai/install \
     | bash -s -- --no-modify-path && \
     opencode --version
@@ -143,9 +139,8 @@ RUN mkdir -p \
 
 # Keep image copies available to seed retained home volumes that predate user-scoped installation.
 USER root
-RUN install -d -m 0755 /usr/local/share/devbox/bin /usr/local/share/devbox/npm-global && \
-    install -m 0755 /home/dev/.opencode/bin/opencode /usr/local/share/devbox/bin/opencode && \
-    cp -a /home/dev/.local/. /usr/local/share/devbox/npm-global/
+RUN install -d -m 0755 /usr/local/share/devbox/bin && \
+    install -m 0755 /home/dev/.opencode/bin/opencode /usr/local/share/devbox/bin/opencode
 
 USER dev
 RUN cs install --contrib cellar && \
