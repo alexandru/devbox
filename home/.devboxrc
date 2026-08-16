@@ -6,4 +6,3 @@ if [ -s "$SDKMAN_DIR/bin/sdkman-init.sh" ]; then
 fi
 
 alias oc='command opencode'
-alias oc2='command opencode2'

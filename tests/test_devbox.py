@@ -65,20 +65,25 @@ class HelperTest(unittest.TestCase):
 
         self.assertRegex(
             dockerfile,
-            r"USER dev\s+RUN curl -fsSL https://opencode.ai/install",
+            r"USER dev[\s\S]+RUN curl -fsSL https://opencode.ai/install",
         )
         self.assertIn("/home/dev/.opencode/bin", dockerfile)
         self.assertNotIn("opencode-home", dockerfile)
         self.assertNotIn("/usr/local/bin/opencode", dockerfile)
         self.assertIn('/usr/local/share/devbox/bin/opencode', dockerfile)
 
-    def test_dockerfile_installs_and_verifies_opencode2(self):
+    def test_dockerfile_installs_copilot_as_dev_in_home(self):
         dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
+        installer = (Path(__file__).parents[1] / "bin" / "devbox-install-user-files").read_text()
 
-        self.assertIn("https://raw.githubusercontent.com/anomalyco/opencode/v2/install", dockerfile)
-        self.assertIn("bash -s -- --no-modify-path", dockerfile)
-        self.assertIn("opencode2 --version", dockerfile)
-        self.assertIn("/home/dev/.opencode/bin", dockerfile)
+        self.assertRegex(
+            dockerfile,
+            r"USER dev\s+RUN npm config set prefix '~/.local/' && \\\n+    npm install -g @github/copilot",
+        )
+        self.assertIn('copilot version', dockerfile)
+        self.assertIn('/home/dev/.local/bin', dockerfile)
+        self.assertIn('/usr/local/share/devbox/npm-global', dockerfile)
+        self.assertIn('copilot_seed=', installer)
 
     def test_dockerfile_defines_opencode_aliases(self):
         dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
@@ -88,24 +93,24 @@ class HelperTest(unittest.TestCase):
         self.assertNotIn("/etc/bash.bashrc", dockerfile)
         self.assertIn("COPY home/.devboxrc", dockerfile)
         self.assertIn("alias oc='command opencode'", devboxrc)
-        self.assertIn("alias oc2='command opencode2'", devboxrc)
         self.assertIn('source "$SDKMAN_DIR/bin/sdkman-init.sh"', devboxrc)
         self.assertIn("grep -Fqx", installer)
         self.assertIn('source "$HOME/.devboxrc"', installer)
 
-    def test_update_all_attempts_both_official_opencode_updates(self):
+    def test_update_all_attempts_official_opencode_update(self):
         script = (Path(__file__).parents[1] / "bin" / "update-all").read_text()
 
         self.assertIn("opencode upgrade --method curl", script)
         self.assertIn("https://opencode.ai/install", script)
-        self.assertIn("https://raw.githubusercontent.com/anomalyco/opencode/v2/install", script)
-        self.assertIn("bash -s -- --no-modify-path", script)
         self.assertIn("sudo apt update && sudo apt upgrade -y", script)
         self.assertIn('run_update "SDKMAN candidate metadata" sdk update', script)
         self.assertIn('run_update "SDKMAN-managed tools" sdk upgrade', script)
         self.assertIn("https://github.com/coursier/launchers/raw/master/coursier", script)
         self.assertIn('run_update "Coursier" update_coursier', script)
         self.assertIn('run_update "Coursier-managed applications" cs update', script)
+        self.assertIn('run_update "GitHub Copilot CLI" update_copilot', script)
+        self.assertIn("npm config set prefix '~/.local/'", script)
+        self.assertIn("npm install -g @github/copilot@latest", script)
 
     def test_update_all_supports_nounset_unsafe_sdkman_ci_installation(self):
         update_all = Path(__file__).parents[1] / "bin" / "update-all"
@@ -117,16 +122,21 @@ class HelperTest(unittest.TestCase):
             sdkman_bin.mkdir(parents=True)
             command_bin.mkdir()
             sdk_call_log = root / "sdk-calls"
+            npm_call_log = root / "npm-calls"
 
             (sdkman_bin / "sdkman-init.sh").write_text(
                 ': "${ZSH_VERSION}"\n'
                 "sdkman_selfupdate_feature=false\n"
                 'sdk() { printf "%s\\n" "$1" >> "$SDK_CALL_LOG"; : "$2"; }\n'
             )
-            for command in ("sudo", "curl", "cs", "opencode", "opencode2"):
+            for command in ("sudo", "curl", "cs", "opencode"):
                 executable = command_bin / command
                 executable.write_text("#!/usr/bin/env bash\nexit 0\n")
                 executable.chmod(0o755)
+            (command_bin / "npm").write_text(
+                '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$NPM_CALL_LOG"\n'
+            )
+            (command_bin / "npm").chmod(0o755)
 
             result = subprocess.run(
                 ["bash", str(update_all)],
@@ -135,15 +145,21 @@ class HelperTest(unittest.TestCase):
                     **os.environ,
                     "PATH": f"{command_bin}:{os.environ['PATH']}",
                     "SDK_CALL_LOG": str(sdk_call_log),
+                    "NPM_CALL_LOG": str(npm_call_log),
                     "SDKMAN_DIR": str(root / "sdkman"),
                 },
                 text=True,
             )
             sdk_calls = sdk_call_log.read_text().splitlines()
+            npm_calls = npm_call_log.read_text().splitlines()
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("unbound variable", result.stderr)
         self.assertEqual(sdk_calls, ["update", "upgrade"])
+        self.assertEqual(
+            npm_calls,
+            ["config set prefix ~/.local/", "install -g @github/copilot@latest"],
+        )
 
     def test_path_is_within_includes_parent_and_children_but_not_siblings(self):
         path_is_within = DEVBOX["path_is_within"]
@@ -738,54 +754,6 @@ class ContainerExecutionTest(unittest.TestCase):
         self.assertEqual(command[-2:], ["/usr/local/bin/devbox-entrypoint", "bash"])
         execvp.assert_not_called()
 
-    def test_agent_runs_opencode_in_interactive_bash(self):
-        instance = new_devbox(
-            "agent",
-            command_args=["--model", "test model"],
-            execution_dir="src",
-        )
-
-        with mock.patch.object(instance, "assert_container_running"), mock.patch.object(
-            instance, "container_directory", return_value="/workspace/src"
-        ), mock.patch.object(instance, "exec_container") as exec_container:
-            instance.agent()
-
-        self.assertEqual(instance.execution_dir, "/workspace/src")
-        exec_container.assert_called_once_with(
-            [
-                "bash",
-                "-ic",
-                'exec opencode "$@"',
-                "bash",
-                "--model",
-                "test model",
-            ]
-        )
-
-    def test_agent2_runs_opencode2_in_interactive_bash(self):
-        instance = new_devbox(
-            "agent2",
-            command_args=["--model", "test model"],
-            execution_dir="src",
-        )
-
-        with mock.patch.object(instance, "assert_container_running"), mock.patch.object(
-            instance, "container_directory", return_value="/workspace/src"
-        ), mock.patch.object(instance, "exec_container") as exec_container:
-            instance.agent2()
-
-        self.assertEqual(instance.execution_dir, "/workspace/src")
-        exec_container.assert_called_once_with(
-            [
-                "bash",
-                "-ic",
-                'exec opencode2 "$@"',
-                "bash",
-                "--model",
-                "test model",
-            ]
-        )
-
 
 class StatusTest(unittest.TestCase):
     def test_status_reports_missing_container(self):
@@ -881,18 +849,6 @@ class ParserTest(unittest.TestCase):
         namespace = DEVBOX["build_parser"]().parse_args(["exec", "python", "-c", "print('ok')"])
 
         self.assertEqual(namespace.command_args, ["python", "-c", "print('ok')"])
-
-    def test_agent_parses_execution_directory_and_passthrough_arguments(self):
-        namespace = DEVBOX["build_parser"]().parse_args(["agent", "-C", "src", "--", "--model", "test"])
-
-        self.assertEqual(namespace.execution_dir, "src")
-        self.assertEqual(namespace.command_args, ["--", "--model", "test"])
-
-    def test_agent2_parses_execution_directory_and_passthrough_arguments(self):
-        namespace = DEVBOX["build_parser"]().parse_args(["agent2", "-C", "src", "--", "--model", "test"])
-
-        self.assertEqual(namespace.execution_dir, "src")
-        self.assertEqual(namespace.command_args, ["--", "--model", "test"])
 
 
 if __name__ == "__main__":

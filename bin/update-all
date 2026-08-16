@@ -44,10 +44,9 @@ update_opencode_v1() {
     fi
 }
 
-update_opencode_v2() {
-    curl -fsSL https://raw.githubusercontent.com/anomalyco/opencode/v2/install \
-        | bash -s -- --no-modify-path && \
-        opencode2 --version
+update_copilot() {
+    npm config set prefix '~/.local/' && \
+        npm install -g @github/copilot@latest
 }
 
 run_update "system packages" update_system_packages
@@ -70,6 +69,6 @@ fi
 run_update "Coursier" update_coursier
 run_update "Coursier-managed applications" cs update
 run_update "OpenCode V1" update_opencode_v1
-run_update "OpenCode V2" update_opencode_v2
+run_update "GitHub Copilot CLI" update_copilot
 
 exit "$status"

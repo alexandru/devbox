@@ -7,7 +7,7 @@ A ready-to-use Linux container for agent-driven development, with a launcher pro
 - Ubuntu 26.04
 - SDKMAN!
 - Node.js
-- OpenCode v1 (`opencode`) and v2 (`opencode2`)
+- OpenCode (`opencode`)
 
 ## Install
 
@@ -37,6 +37,17 @@ devbox start ~/Projects
 # Opens a shell that chdirs straight in a desired project's path
 devbox shell ~/Projects/path/to/project
 ```
+
+### OpenCode alias
+
+To replace the removed `devbox agent` command, add this Bash alias to your shell configuration:
+
+```sh
+alias agent='devbox exec . bash -ic '\''exec opencode "$@"'\'' bash'
+```
+
+The `.` runs OpenCode in the current workspace directory. The alias passes any arguments through,
+for example: `agent --model model-name`.
 
 ### Custom mounts
 
