@@ -44,6 +44,14 @@ update_opencode_v1() {
     fi
 }
 
+update_pi() {
+    npm install -g --prefix "$HOME/.local" --ignore-scripts @earendil-works/pi-coding-agent
+}
+
+update_copilot() {
+    npm install -g --prefix "$HOME/.local" @github/copilot
+}
+
 run_update "system packages" update_system_packages
 
 set +u
@@ -64,5 +72,7 @@ fi
 run_update "Coursier" update_coursier
 run_update "Coursier-managed applications" cs update
 run_update "OpenCode V1" update_opencode_v1
+run_update "Pi" update_pi
+run_update "GitHub Copilot CLI" update_copilot
 
 exit "$status"

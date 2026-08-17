@@ -98,7 +98,7 @@ RUN mkdir -p /workspaces /home/dev/.config && \
     chown -R dev:dev /opt/sdkman /workspaces /home/dev
 
 ENV HOME=/home/dev
-ENV PATH="/home/dev/bin:/home/dev/.opencode/bin:/home/dev/.local/share/coursier/bin:/usr/local/bin:${PATH}"
+ENV PATH="/home/dev/bin:/home/dev/.local/bin:/home/dev/.opencode/bin:/home/dev/.local/share/coursier/bin:/usr/local/bin:${PATH}"
 
 # Container helper scripts
 COPY bin/devbox-entrypoint /usr/local/bin/devbox-entrypoint
@@ -129,6 +129,11 @@ USER dev
 RUN curl -fsSL https://opencode.ai/install \
     | bash -s -- --no-modify-path && \
     opencode --version
+
+RUN npm install -g --prefix "$HOME/.local" --ignore-scripts @earendil-works/pi-coding-agent && \
+    npm install -g --prefix "$HOME/.local" @github/copilot && \
+    pi --version && \
+    copilot --version
 
 # Pre-create common JVM tool directories so mounted files don't force root-owned parent creation.
 RUN mkdir -p \
