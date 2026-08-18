@@ -149,7 +149,8 @@ RUN mkdir -p \
 # Keep image copies available to seed retained home volumes that predate user-scoped installation.
 USER root
 RUN install -d -m 0755 /usr/local/share/devbox/bin && \
-    install -m 0755 /home/dev/.opencode/bin/opencode /usr/local/share/devbox/bin/opencode
+    install -m 0755 /home/dev/.opencode/bin/opencode /usr/local/share/devbox/bin/opencode && \
+    install -m 0755 /home/dev/.opencode/bin/opencode2 /usr/local/share/devbox/bin/opencode2
 
 USER dev
 RUN cs install --contrib cellar && \

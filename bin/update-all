@@ -44,6 +44,11 @@ update_opencode_v1() {
     fi
 }
 
+update_opencode_v2() {
+    curl -fsSL https://raw.githubusercontent.com/anomalyco/opencode/v2/install \
+        | bash -s -- --no-modify-path
+}
+
 update_pi() {
     npm install -g --prefix "$HOME/.local" --ignore-scripts @earendil-works/pi-coding-agent
 }
@@ -72,6 +77,7 @@ fi
 run_update "Coursier" update_coursier
 run_update "Coursier-managed applications" cs update
 run_update "OpenCode V1" update_opencode_v1
+run_update "OpenCode V2" update_opencode_v2
 run_update "Pi" update_pi
 run_update "GitHub Copilot CLI" update_copilot
 

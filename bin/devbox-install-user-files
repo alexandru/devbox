@@ -11,7 +11,7 @@ install -o dev -g dev -m 0644 /usr/local/share/devbox/devboxrc "$home/.devboxrc"
 
 opencode_bin="$home/.opencode/bin"
 install -d -o dev -g dev -m 0755 "$opencode_bin"
-for binary in opencode; do
+for binary in opencode opencode2; do
     if [[ ! -x "$opencode_bin/$binary" && -x "/usr/local/share/devbox/bin/$binary" ]]; then
         install -o dev -g dev -m 0755 "/usr/local/share/devbox/bin/$binary" "$opencode_bin/$binary"
     fi

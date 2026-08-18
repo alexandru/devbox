@@ -68,8 +68,6 @@ class HelperTest(unittest.TestCase):
             r"USER dev[\s\S]+RUN curl -fsSL https://opencode.ai/install",
         )
         self.assertIn("/home/dev/.opencode/bin", dockerfile)
-        self.assertNotIn("opencode-home", dockerfile)
-        self.assertNotRegex(dockerfile, r"/usr/local/bin/opencode\b")
         self.assertIn('/usr/local/share/devbox/bin/opencode', dockerfile)
 
     def test_dockerfile_installs_opencode_v2_alongside_v1(self):
@@ -80,6 +78,14 @@ class HelperTest(unittest.TestCase):
             r"USER dev(?:(?!USER root)[\s\S])+https://raw.githubusercontent.com/anomalyco/opencode/v2/install",
         )
         self.assertRegex(dockerfile, r'opencode2"? --version')
+
+    def test_retained_home_seeding_includes_both_opencode_versions(self):
+        dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
+        installer = (Path(__file__).parents[1] / "bin" / "devbox-install-user-files").read_text()
+
+        self.assertIn("/usr/local/share/devbox/bin/opencode", dockerfile)
+        self.assertIn("/usr/local/share/devbox/bin/opencode2", dockerfile)
+        self.assertIn("for binary in opencode opencode2; do", installer)
 
     def test_dockerfile_defines_opencode_aliases(self):
         dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
@@ -93,11 +99,13 @@ class HelperTest(unittest.TestCase):
         self.assertIn("grep -Fqx", installer)
         self.assertIn('source "$HOME/.devboxrc"', installer)
 
-    def test_update_all_attempts_official_opencode_update(self):
+    def test_update_all_attempts_official_opencode_updates(self):
         script = (Path(__file__).parents[1] / "bin" / "update-all").read_text()
 
         self.assertIn("opencode upgrade --method curl", script)
         self.assertIn("https://opencode.ai/install", script)
+        self.assertIn("https://raw.githubusercontent.com/anomalyco/opencode/v2/install", script)
+        self.assertIn('run_update "OpenCode V2" update_opencode_v2', script)
         self.assertIn("sudo apt update && sudo apt upgrade -y", script)
         self.assertIn('run_update "SDKMAN candidate metadata" sdk update', script)
         self.assertIn('run_update "SDKMAN-managed tools" sdk upgrade', script)
