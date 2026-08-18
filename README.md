@@ -7,7 +7,7 @@ A ready-to-use Linux container for agent-driven development, with a launcher pro
 - Ubuntu 26.04
 - SDKMAN!
 - Node.js
-- OpenCode (`opencode`)
+- OpenCode v1 (`opencode`) and v2 (`opencode2`)
 
 ## Install
 

@@ -130,6 +130,10 @@ RUN curl -fsSL https://opencode.ai/install \
     | bash -s -- --no-modify-path && \
     opencode --version
 
+RUN curl -fsSL https://raw.githubusercontent.com/anomalyco/opencode/v2/install \
+    | bash -s -- --no-modify-path && \
+    opencode2 --version
+
 RUN npm install -g --prefix "$HOME/.local" --ignore-scripts @earendil-works/pi-coding-agent && \
     npm install -g --prefix "$HOME/.local" @github/copilot && \
     pi --version && \

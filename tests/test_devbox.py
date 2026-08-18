@@ -69,8 +69,17 @@ class HelperTest(unittest.TestCase):
         )
         self.assertIn("/home/dev/.opencode/bin", dockerfile)
         self.assertNotIn("opencode-home", dockerfile)
-        self.assertNotIn("/usr/local/bin/opencode", dockerfile)
+        self.assertNotRegex(dockerfile, r"/usr/local/bin/opencode\b")
         self.assertIn('/usr/local/share/devbox/bin/opencode', dockerfile)
+
+    def test_dockerfile_installs_opencode_v2_alongside_v1(self):
+        dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
+
+        self.assertRegex(
+            dockerfile,
+            r"USER dev(?:(?!USER root)[\s\S])+https://raw.githubusercontent.com/anomalyco/opencode/v2/install",
+        )
+        self.assertRegex(dockerfile, r'opencode2"? --version')
 
     def test_dockerfile_defines_opencode_aliases(self):
         dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
