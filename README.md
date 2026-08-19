@@ -41,17 +41,6 @@ devbox start ~/Projects
 devbox shell ~/Projects/path/to/project
 ```
 
-### Nested sandbox
-
-Codex can run its Bubblewrap sandbox inside Docker or Podman:
-
-```sh
-devbox start --nested-sandbox ~/Projects
-devbox compose --nested-sandbox ~/Projects
-```
-
-This grants extra Linux capabilities and disables outer seccomp/AppArmor confinement so Bubblewrap can create its sandbox. It is unsupported by `wslc`. Recreate an existing container with `devbox purge` before changing this option.
-
 ### Aliases
 
 Example:
