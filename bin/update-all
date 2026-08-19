@@ -36,31 +36,6 @@ update_coursier() {
     return "$result"
 }
 
-update_opencode_v1() {
-    if command -v opencode >/dev/null; then
-        opencode upgrade --method curl
-    else
-        curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path
-    fi
-}
-
-update_opencode_v2() {
-    curl -fsSL https://raw.githubusercontent.com/anomalyco/opencode/v2/install \
-        | bash -s -- --no-modify-path
-}
-
-update_pi() {
-    npm install -g --prefix "$HOME/.local" --ignore-scripts @earendil-works/pi-coding-agent
-}
-
-update_copilot() {
-    npm install -g --prefix "$HOME/.local" @github/copilot
-}
-
-update_codex() {
-    npm install -g --prefix "$HOME/.local" @openai/codex
-}
-
 run_update "system packages" update_system_packages
 
 set +u
@@ -80,10 +55,5 @@ fi
 
 run_update "Coursier" update_coursier
 run_update "Coursier-managed applications" cs update
-run_update "OpenCode V1" update_opencode_v1
-run_update "OpenCode V2" update_opencode_v2
-run_update "Pi" update_pi
-run_update "GitHub Copilot CLI" update_copilot
-run_update "Codex CLI" update_codex
 
 exit "$status"

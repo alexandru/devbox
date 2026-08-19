@@ -7,10 +7,6 @@ A ready-to-use Linux container for agent-driven development, with a launcher pro
 - Ubuntu 26.04
 - SDKMAN!
 - Node.js
-- Copilot CLI
-- Codex CLI
-- OpenCode v1/v2
-- Pi
 
 ## Install
 
@@ -41,14 +37,6 @@ devbox start ~/Projects
 devbox shell ~/Projects/path/to/project
 ```
 
-### Aliases
-
-Example:
-
-```sh
-alias agent='devbox exec . bash -ic '\''exec opencode "$@"'\'' bash'
-```
-
 ### Environment forwarding
 
 For configuring the `devbox` script see the available env variables that it can use:
@@ -76,10 +64,6 @@ fi
 # Forcing `podman`; if not provided, defaults to whatever it finds 
 # (wslc, docker, podman in this order)
 export CONTAINER_CLI="podman"
-
-# Set the OpenCode API key for authentication
-# (optional, OpenCode can be configured manually from a shell)
-export DEVBOX_OPENCODE_API_KEY="$("$OP_BIN" read op://Private/OpenCode/Api/Personal)"
 
 # Set the Wireguard VPN configuration (optional, VPN is not required)
 export DEVBOX_WIREGUARD_CONFIG_STR="$("$OP_BIN" read op://Private/VPN/notesPlain)"

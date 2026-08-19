@@ -99,7 +99,7 @@ RUN mkdir -p /workspaces /home/dev/.config && \
     chown -R dev:dev /opt/sdkman /workspaces /home/dev
 
 ENV HOME=/home/dev
-ENV PATH="/home/dev/bin:/home/dev/.local/bin:/home/dev/.opencode/bin:/home/dev/.local/share/coursier/bin:/usr/local/bin:${PATH}"
+ENV PATH="/home/dev/bin:/home/dev/.local/bin:/home/dev/.local/share/coursier/bin:/usr/local/bin:${PATH}"
 
 # Container helper scripts
 COPY bin/devbox-entrypoint /usr/local/bin/devbox-entrypoint
@@ -123,24 +123,8 @@ RUN ln -sf /usr/local/bin/osc52-clipboard /usr/local/bin/wl-copy && \
     ln -sf /usr/local/bin/osc52-clipboard /usr/local/bin/xclip && \
     ln -sf /usr/local/bin/osc52-clipboard /usr/local/bin/xsel
 
-# User-scoped tools
 WORKDIR /home/dev
 USER dev
-
-RUN curl -fsSL https://opencode.ai/install \
-    | bash -s -- --no-modify-path && \
-    opencode --version
-
-RUN curl -fsSL https://raw.githubusercontent.com/anomalyco/opencode/v2/install \
-    | bash -s -- --no-modify-path && \
-    opencode2 --version
-
-RUN npm install -g --prefix "$HOME/.local" --ignore-scripts @earendil-works/pi-coding-agent && \
-    npm install -g --prefix "$HOME/.local" @github/copilot && \
-    npm install -g --prefix "$HOME/.local" @openai/codex && \
-    pi --version && \
-    copilot --version && \
-    codex --version
 
 # Pre-create common JVM tool directories so mounted files don't force root-owned parent creation.
 RUN mkdir -p \
@@ -149,13 +133,6 @@ RUN mkdir -p \
     /home/dev/.gradle \
     /home/dev/.config/sbt/2
 
-# Keep image copies available to seed retained home volumes that predate user-scoped installation.
-USER root
-RUN install -d -m 0755 /usr/local/share/devbox/bin && \
-    install -m 0755 /home/dev/.opencode/bin/opencode /usr/local/share/devbox/bin/opencode && \
-    install -m 0755 /home/dev/.opencode/bin/opencode2 /usr/local/share/devbox/bin/opencode2
-
-USER dev
 RUN cs install --contrib cellar && \
     cellar telemetry disable
 

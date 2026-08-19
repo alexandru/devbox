@@ -57,17 +57,27 @@ class HelperTest(unittest.TestCase):
 
         self.assertIn("bubblewrap", dockerfile)
 
-    def test_dockerfile_installs_codex_and_update_all_keeps_it_current(self):
+    def test_agent_clis_are_not_bundled_or_updated(self):
         root = Path(__file__).parents[1]
         dockerfile = (root / "Dockerfile").read_text()
         update_all = (root / "bin" / "update-all").read_text()
+        installer = (root / "bin" / "devbox-install-user-files").read_text()
+        devboxrc = (root / "home" / ".devboxrc").read_text()
         readme = (root / "README.md").read_text()
 
-        self.assertIn('npm install -g --prefix "$HOME/.local" @openai/codex', dockerfile)
-        self.assertIn("codex --version", dockerfile)
-        self.assertIn('npm install -g --prefix "$HOME/.local" @openai/codex', update_all)
-        self.assertIn('run_update "Codex CLI" update_codex', update_all)
-        self.assertIn("Codex CLI", readme)
+        for content in (dockerfile, update_all, installer, devboxrc, readme):
+            for unwanted in (
+                "opencode",
+                "@earendil-works/pi-coding-agent",
+                "@github/copilot",
+                "@openai/codex",
+                "OpenCode",
+                "Copilot CLI",
+                "Codex CLI",
+                "\n- Pi\n",
+            ):
+                with self.subTest(unwanted=unwanted):
+                    self.assertNotIn(unwanted, content)
 
     def test_dockerfile_disables_cellar_telemetry_as_dev_user(self):
         dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
@@ -77,52 +87,20 @@ class HelperTest(unittest.TestCase):
             r"USER dev[\s\S]+RUN cs install --contrib cellar && \\\n+    cellar telemetry disable",
         )
 
-    def test_dockerfile_installs_opencode_as_dev_in_home(self):
-        dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
-
-        self.assertRegex(
-            dockerfile,
-            r"USER dev[\s\S]+RUN curl -fsSL https://opencode.ai/install",
-        )
-        self.assertIn("/home/dev/.opencode/bin", dockerfile)
-        self.assertIn('/usr/local/share/devbox/bin/opencode', dockerfile)
-
-    def test_dockerfile_installs_opencode_v2_alongside_v1(self):
-        dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
-
-        self.assertRegex(
-            dockerfile,
-            r"USER dev(?:(?!USER root)[\s\S])+https://raw.githubusercontent.com/anomalyco/opencode/v2/install",
-        )
-        self.assertRegex(dockerfile, r'opencode2"? --version')
-
-    def test_retained_home_seeding_includes_both_opencode_versions(self):
-        dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
-        installer = (Path(__file__).parents[1] / "bin" / "devbox-install-user-files").read_text()
-
-        self.assertIn("/usr/local/share/devbox/bin/opencode", dockerfile)
-        self.assertIn("/usr/local/share/devbox/bin/opencode2", dockerfile)
-        self.assertIn("for binary in opencode opencode2; do", installer)
-
-    def test_dockerfile_defines_opencode_aliases(self):
+    def test_dockerfile_installs_devboxrc(self):
         dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
         devboxrc = (Path(__file__).parents[1] / "home" / ".devboxrc").read_text()
         installer = (Path(__file__).parents[1] / "bin" / "devbox-install-user-files").read_text()
 
         self.assertNotIn("/etc/bash.bashrc", dockerfile)
         self.assertIn("COPY home/.devboxrc", dockerfile)
-        self.assertIn("alias oc='command opencode'", devboxrc)
         self.assertIn('source "$SDKMAN_DIR/bin/sdkman-init.sh"', devboxrc)
         self.assertIn("grep -Fqx", installer)
         self.assertIn('source "$HOME/.devboxrc"', installer)
 
-    def test_update_all_attempts_official_opencode_updates(self):
+    def test_update_all_keeps_system_and_jvm_tools_current(self):
         script = (Path(__file__).parents[1] / "bin" / "update-all").read_text()
 
-        self.assertIn("opencode upgrade --method curl", script)
-        self.assertIn("https://opencode.ai/install", script)
-        self.assertIn("https://raw.githubusercontent.com/anomalyco/opencode/v2/install", script)
-        self.assertIn('run_update "OpenCode V2" update_opencode_v2', script)
         self.assertIn("sudo apt update && sudo apt upgrade -y", script)
         self.assertIn('run_update "SDKMAN candidate metadata" sdk update', script)
         self.assertIn('run_update "SDKMAN-managed tools" sdk upgrade', script)
@@ -146,7 +124,7 @@ class HelperTest(unittest.TestCase):
                 "sdkman_selfupdate_feature=false\n"
                 'sdk() { printf "%s\\n" "$1" >> "$SDK_CALL_LOG"; : "$2"; }\n'
             )
-            for command in ("sudo", "curl", "cs", "npm", "opencode"):
+            for command in ("sudo", "curl", "cs"):
                 executable = command_bin / command
                 executable.write_text("#!/usr/bin/env bash\nexit 0\n")
                 executable.chmod(0o755)
