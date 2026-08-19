@@ -52,6 +52,23 @@ class HelperTest(unittest.TestCase):
             with self.subTest(candidate=candidate):
                 self.assertIn(f"sdk install {candidate}", dockerfile)
 
+    def test_dockerfile_installs_bubblewrap(self):
+        dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
+
+        self.assertIn("bubblewrap", dockerfile)
+
+    def test_dockerfile_installs_codex_and_update_all_keeps_it_current(self):
+        root = Path(__file__).parents[1]
+        dockerfile = (root / "Dockerfile").read_text()
+        update_all = (root / "bin" / "update-all").read_text()
+        readme = (root / "README.md").read_text()
+
+        self.assertIn('npm install -g --prefix "$HOME/.local" @openai/codex', dockerfile)
+        self.assertIn("codex --version", dockerfile)
+        self.assertIn('npm install -g --prefix "$HOME/.local" @openai/codex', update_all)
+        self.assertIn('run_update "Codex CLI" update_codex', update_all)
+        self.assertIn("Codex CLI", readme)
+
     def test_dockerfile_disables_cellar_telemetry_as_dev_user(self):
         dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
 
@@ -129,7 +146,7 @@ class HelperTest(unittest.TestCase):
                 "sdkman_selfupdate_feature=false\n"
                 'sdk() { printf "%s\\n" "$1" >> "$SDK_CALL_LOG"; : "$2"; }\n'
             )
-            for command in ("sudo", "curl", "cs", "opencode"):
+            for command in ("sudo", "curl", "cs", "npm", "opencode"):
                 executable = command_bin / command
                 executable.write_text("#!/usr/bin/env bash\nexit 0\n")
                 executable.chmod(0o755)
@@ -552,6 +569,18 @@ class ConfigurationTest(unittest.TestCase):
             stdout.getvalue(),
         )
 
+    def test_nested_sandbox_compose_configuration(self):
+        instance = new_devbox("compose", container_cli="docker")
+        instance.nested_sandbox = True
+
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            instance.compose_service()
+
+        output = stdout.getvalue()
+        for capability in ("SYS_ADMIN", "SYS_CHROOT", "SETUID", "SETGID", "SYS_PTRACE"):
+            self.assertIn(f"      - {capability}", output)
+        self.assertIn("    security_opt:\n      - seccomp=unconfined\n      - apparmor=unconfined", output)
+
     def test_wireguard_rejects_path_and_string_configuration_together(self):
         instance = new_devbox(container_cli="podman")
 
@@ -587,6 +616,13 @@ class ConfigurationTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(SystemExit, "wslc.*NET_ADMIN"):
                 instance.configure_wireguard()
+
+    def test_nested_sandbox_fails_early_with_explanation_on_wslc(self):
+        instance = new_devbox(container_cli="wslc.exe")
+        instance.nested_sandbox = True
+
+        with self.assertRaisesRegex(SystemExit, "Nested sandbox.*wslc"):
+            instance.configure_nested_sandbox()
 
     def test_help_env_documents_optional_wireguard_configuration(self):
         help_text = DEVBOX["ENVIRONMENT_HELP"]
@@ -653,6 +689,37 @@ class ContainerExecutionTest(unittest.TestCase):
                 instance.ensure_custom_mounts()
 
         self.assertIn("purge", stderr.getvalue())
+
+    def test_nested_sandbox_mismatch_requires_purge(self):
+        instance = new_devbox(container_cli="docker")
+        instance.nested_sandbox = True
+
+        with mock.patch.object(
+            instance,
+            "container_inspect",
+            return_value={"Config": {"Labels": {}}},
+        ), mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            with self.assertRaisesRegex(SystemExit, "1"):
+                instance.ensure_nested_sandbox()
+
+        self.assertIn("purge", stderr.getvalue())
+
+    def test_nested_sandbox_adds_runtime_arguments(self):
+        instance = new_devbox(container_cli="docker")
+        instance.project_mount_dir = "/project"
+        instance.project_container_mount_dir = "/project"
+        instance.project_container_dir = "/project"
+        instance.nested_sandbox = True
+
+        with mock.patch.object(instance, "run_cli") as run_cli:
+            instance.run_new_container()
+
+        command = run_cli.call_args.args[0]
+        self.assertIn("org.alexn.devbox.nested-sandbox=true", command)
+        for capability in ("SYS_ADMIN", "SYS_CHROOT", "SETUID", "SETGID", "SYS_PTRACE"):
+            self.assertIn(capability, command)
+        self.assertIn("seccomp=unconfined", command)
+        self.assertIn("apparmor=unconfined", command)
 
     def test_project_mount_accepts_docker_desktop_macos_source(self):
         instance = new_devbox(container_cli="docker")
@@ -846,6 +913,14 @@ class ParserTest(unittest.TestCase):
                     [command, "--mount", "/one:/home/dev/one", "--mount", "/two:/home/dev/two:ro", "."]
                 )
                 self.assertEqual(namespace.mounts, ["/one:/home/dev/one", "/two:/home/dev/two:ro"])
+
+    def test_start_and_compose_parse_nested_sandbox_option(self):
+        parser = DEVBOX["build_parser"]()
+
+        for command in ("start", "compose"):
+            with self.subTest(command=command):
+                namespace = parser.parse_args([command, "--nested-sandbox", "."])
+                self.assertTrue(namespace.nested_sandbox)
 
     def test_exec_preserves_passthrough_arguments(self):
         namespace = DEVBOX["build_parser"]().parse_args(["exec", "python", "-c", "print('ok')"])

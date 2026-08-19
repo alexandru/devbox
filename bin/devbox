@@ -23,6 +23,7 @@ CONTAINER_NAME = "devbox"
 CONTAINER_LABEL = "org.alexn.devbox=true"
 HOME_VOLUME_LABEL = "org.alexn.devbox.home-volume"
 MOUNTS_LABEL = "org.alexn.devbox.mounts"
+NESTED_SANDBOX_LABEL = "org.alexn.devbox.nested-sandbox"
 WORKSPACE_LINK = "/workspace"
 EXEC_WORKDIR = "/workspace"
 CONTAINER_USER = "dev"
@@ -254,6 +255,7 @@ class DevBox:
         self.wireguard_config_host_path = ""
         self.wireguard_config_str = ""
         self.wireguard_mtu = ""
+        self.nested_sandbox = False
 
     def uses_wslc(self):
         return is_wslc_cli(self.container_cli)
@@ -323,6 +325,12 @@ class DevBox:
             self.wireguard_mtu = os.environ.get("DEVBOX_WIREGUARD_MTU", "1420")
             if not self.wireguard_mtu.isdigit() or not 576 <= int(self.wireguard_mtu) <= 9000:
                 raise SystemExit("DEVBOX_WIREGUARD_MTU must be an integer from 576 through 9000.")
+
+    def configure_nested_sandbox(self):
+        if self.nested_sandbox and self.uses_wslc():
+            raise SystemExit(
+                "Nested sandbox is not supported by wslc. Set CONTAINER_CLI=podman or CONTAINER_CLI=docker."
+            )
 
     def wireguard_enabled(self):
         return bool(self.wireguard_config_host_path or self.wireguard_config_str)
@@ -448,6 +456,19 @@ class DevBox:
         )
         raise SystemExit(1)
 
+    def ensure_nested_sandbox(self):
+        labels = self.container_inspect().get("Config", {}).get("Labels", {}) or {}
+        current = labels.get(NESTED_SANDBOX_LABEL, "false") == "true"
+        if current == self.nested_sandbox:
+            return
+
+        print("Container already exists with different nested sandbox configuration.", file=sys.stderr)
+        print(
+            f"Run `{sys.argv[0]} purge` and start it again to apply --nested-sandbox.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
     def ensure_wireguard_config(self):
         mounted_path = self.container_mount_source(WIREGUARD_CONFIG_CONTAINER_PATH)
         container = self.container_inspect()
@@ -523,6 +544,7 @@ class DevBox:
         if self.container_exists():
             self.ensure_project_mount()
             self.ensure_custom_mounts()
+            self.ensure_nested_sandbox()
             self.ensure_wireguard_config()
             self.ensure_agent_port()
             self.run_cli(
@@ -712,6 +734,14 @@ class DevBox:
         args.extend(["-e", f"DEVBOX_WIREGUARD_MTU={self.wireguard_mtu}"])
         return args
 
+    def nested_sandbox_args(self):
+        if not self.nested_sandbox:
+            return []
+        args = []
+        for capability in ("SYS_ADMIN", "SYS_CHROOT", "SETUID", "SETGID", "SYS_PTRACE"):
+            args.extend(["--cap-add", capability])
+        return [*args, "--security-opt", "seccomp=unconfined", "--security-opt", "apparmor=unconfined"]
+
     def wireguard_host_route_command(self):
         # wg-quick suppresses the main default route for a full tunnel. A specific
         # main-table route keeps Docker Desktop's host endpoint outside the tunnel.
@@ -766,6 +796,8 @@ class DevBox:
                 f"{HOME_VOLUME_LABEL}={self.home_volume}",
                 "--label",
                 f"{MOUNTS_LABEL}={self.mount_label()}",
+                "--label",
+                f"{NESTED_SANDBOX_LABEL}={str(self.nested_sandbox).lower()}",
                 "--user",
                 ROOT_USER,
                 "-v",
@@ -776,6 +808,7 @@ class DevBox:
                 *self.container_env_args,
                 *self.custom_mount_args(),
                 *self.agent_port_args(),
+                *self.nested_sandbox_args(),
                 *self.wireguard_args(),
                 "-w",
                 self.project_container_dir,
@@ -867,9 +900,22 @@ class DevBox:
             print("    ports:")
             print('      - "${DEVBOX_AGENT_PORT}:10012"')
 
+        capabilities = []
+        if self.nested_sandbox:
+            capabilities.extend(("SYS_ADMIN", "SYS_CHROOT", "SETUID", "SETGID", "SYS_PTRACE"))
         if self.wireguard_enabled():
+            capabilities.append("NET_ADMIN")
+        if capabilities:
             print("    cap_add:")
-            print("      - NET_ADMIN")
+            for capability in capabilities:
+                print(f"      - {capability}")
+
+        if self.nested_sandbox:
+            print("    security_opt:")
+            print("      - seccomp=unconfined")
+            print("      - apparmor=unconfined")
+
+        if self.wireguard_enabled():
             print("    sysctls:")
             print("      net.ipv4.conf.all.src_valid_mark: \"1\"")
             print("    extra_hosts:")
@@ -879,6 +925,7 @@ class DevBox:
         print('      org.alexn.devbox: "true"')
         print(f"      {HOME_VOLUME_LABEL}: {yaml_quote(self.home_volume)}")
         print(f"      {MOUNTS_LABEL}: {yaml_quote(self.mount_label())}")
+        print(f"      {NESTED_SANDBOX_LABEL}: {yaml_quote(str(self.nested_sandbox).lower())}")
 
         self.compose_environment()
         self.compose_mounts()
@@ -1113,6 +1160,11 @@ def build_parser():
             metavar="HOST:CONTAINER[:OPTIONS]",
             help="Bind-mount an existing host file or directory. Repeatable; ~ is not expanded.",
         )
+        command_parser.add_argument(
+            "--nested-sandbox",
+            action="store_true",
+            help="Allow Bubblewrap's nested sandbox. Supported by Docker and Podman, not wslc.",
+        )
         command_parser.add_argument("project_directory")
         return command_parser
 
@@ -1191,6 +1243,7 @@ def create_devbox(namespace, container_cli):
 
     devbox = DevBox(namespace.command, project_dir, command_args, container_cli, execution_dir)
     devbox.mounts = parse_mounts(getattr(namespace, "mounts", []))
+    devbox.nested_sandbox = getattr(namespace, "nested_sandbox", False)
     return devbox
 
 
@@ -1244,6 +1297,7 @@ def main(argv=None):
 
     if namespace.command in {"start", "restart", "shell", "exec", "compose"}:
         devbox.configure_wireguard()
+        devbox.configure_nested_sandbox()
 
     devbox.configure_agent_port()
     devbox.configure_container_env_args()

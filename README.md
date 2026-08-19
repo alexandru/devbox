@@ -8,6 +8,7 @@ A ready-to-use Linux container for agent-driven development, with a launcher pro
 - SDKMAN!
 - Node.js
 - Copilot CLI
+- Codex CLI
 - OpenCode v1/v2
 - Pi
 
@@ -39,6 +40,17 @@ devbox start ~/Projects
 # Opens a shell that chdirs straight in a desired project's path
 devbox shell ~/Projects/path/to/project
 ```
+
+### Nested sandbox
+
+Codex can run its Bubblewrap sandbox inside Docker or Podman:
+
+```sh
+devbox start --nested-sandbox ~/Projects
+devbox compose --nested-sandbox ~/Projects
+```
+
+This grants extra Linux capabilities and disables outer seccomp/AppArmor confinement so Bubblewrap can create its sandbox. It is unsupported by `wslc`. Recreate an existing container with `devbox purge` before changing this option.
 
 ### Aliases
 

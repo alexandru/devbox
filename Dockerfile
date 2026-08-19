@@ -12,8 +12,9 @@ ENV SHELL=/bin/bash
 RUN apt-get update && \
     apt-get upgrade -y && \
     apt-get install -y --no-install-recommends \
-        binutils \
-        bsdextrautils \
+    binutils \
+    bubblewrap \
+    bsdextrautils \
         ca-certificates \
         curl \
         direnv \
@@ -136,8 +137,10 @@ RUN curl -fsSL https://raw.githubusercontent.com/anomalyco/opencode/v2/install \
 
 RUN npm install -g --prefix "$HOME/.local" --ignore-scripts @earendil-works/pi-coding-agent && \
     npm install -g --prefix "$HOME/.local" @github/copilot && \
+    npm install -g --prefix "$HOME/.local" @openai/codex && \
     pi --version && \
-    copilot --version
+    copilot --version && \
+    codex --version
 
 # Pre-create common JVM tool directories so mounted files don't force root-owned parent creation.
 RUN mkdir -p \
