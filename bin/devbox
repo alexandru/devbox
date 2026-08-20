@@ -24,6 +24,7 @@ CONTAINER_LABEL = "org.alexn.devbox=true"
 HOME_VOLUME_LABEL = "org.alexn.devbox.home-volume"
 MOUNTS_LABEL = "org.alexn.devbox.mounts"
 NESTED_SANDBOX_LABEL = "org.alexn.devbox.nested-sandbox"
+EXTRA_ARGS_LABEL = "org.alexn.devbox.extra-args"
 WORKSPACE_LINK = "/workspace"
 EXEC_WORKDIR = "/workspace"
 CONTAINER_USER = "dev"
@@ -256,6 +257,7 @@ class DevBox:
         self.wireguard_config_str = ""
         self.wireguard_mtu = ""
         self.nested_sandbox = False
+        self.extra_args = []
 
     def uses_wslc(self):
         return is_wslc_cli(self.container_cli)
@@ -469,6 +471,22 @@ class DevBox:
         )
         raise SystemExit(1)
 
+    def extra_args_label(self):
+        return json.dumps(self.extra_args, separators=(",", ":"))
+
+    def ensure_extra_args(self):
+        labels = self.container_inspect().get("Config", {}).get("Labels", {}) or {}
+        current = labels.get(EXTRA_ARGS_LABEL, "[]")
+        if current == self.extra_args_label():
+            return
+
+        print("Container already exists with different extra docker run arguments.", file=sys.stderr)
+        print(
+            f"Run `{sys.argv[0]} purge` and start it again to apply --extra-args.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
     def ensure_wireguard_config(self):
         mounted_path = self.container_mount_source(WIREGUARD_CONFIG_CONTAINER_PATH)
         container = self.container_inspect()
@@ -545,6 +563,7 @@ class DevBox:
             self.ensure_project_mount()
             self.ensure_custom_mounts()
             self.ensure_nested_sandbox()
+            self.ensure_extra_args()
             self.ensure_wireguard_config()
             self.ensure_agent_port()
             self.run_cli(
@@ -798,6 +817,8 @@ class DevBox:
                 f"{MOUNTS_LABEL}={self.mount_label()}",
                 "--label",
                 f"{NESTED_SANDBOX_LABEL}={str(self.nested_sandbox).lower()}",
+                "--label",
+                f"{EXTRA_ARGS_LABEL}={self.extra_args_label()}",
                 "--user",
                 ROOT_USER,
                 "-v",
@@ -810,6 +831,7 @@ class DevBox:
                 *self.agent_port_args(),
                 *self.nested_sandbox_args(),
                 *self.wireguard_args(),
+                *self.extra_args,
                 "-w",
                 self.project_container_dir,
                 IMAGE,
@@ -926,6 +948,7 @@ class DevBox:
         print(f"      {HOME_VOLUME_LABEL}: {yaml_quote(self.home_volume)}")
         print(f"      {MOUNTS_LABEL}: {yaml_quote(self.mount_label())}")
         print(f"      {NESTED_SANDBOX_LABEL}: {yaml_quote(str(self.nested_sandbox).lower())}")
+        print(f"      {EXTRA_ARGS_LABEL}: {yaml_quote(self.extra_args_label())}")
 
         self.compose_environment()
         self.compose_mounts()
@@ -1165,6 +1188,13 @@ def build_parser():
             action="store_true",
             help="Allow Bubblewrap's nested sandbox. Supported by Docker and Podman, not wslc.",
         )
+        command_parser.add_argument(
+            "--extra-args",
+            action="append",
+            default=[],
+            metavar="ARG",
+            help="Extra container run argument. Repeatable; passed to `docker run`/`podman run` as-is.",
+        )
         command_parser.add_argument("project_directory")
         return command_parser
 
@@ -1244,6 +1274,7 @@ def create_devbox(namespace, container_cli):
     devbox = DevBox(namespace.command, project_dir, command_args, container_cli, execution_dir)
     devbox.mounts = parse_mounts(getattr(namespace, "mounts", []))
     devbox.nested_sandbox = getattr(namespace, "nested_sandbox", False)
+    devbox.extra_args = list(getattr(namespace, "extra_args", []))
     return devbox
 
 
