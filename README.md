@@ -29,12 +29,24 @@ irm https://raw.githubusercontent.com/alexandru/devbox/main/install.ps1 | iex
 Requires Docker, Podman, or [wslc](https://learn.microsoft.com/en-us/windows/wsl/tutorials/wsl-containers?source=recommendations).
 
 ```sh
-# Starts the container, mounting ~/Projects in it
-# (this being the "workspace" that contains projects of interest)
-devbox start ~/Projects
+# Host workspace mode. Git metadata and projects under ~/Projects are available in the container.
+devbox start --workspace ~/Projects
 
-# Opens a shell that chdirs straight in a desired project's path
+# Open a shell in a host workspace directory.
 devbox shell ~/Projects/path/to/project
+
+# Container-native mode. Keep projects in a persistent named volume.
+# `start` creates the volume if it does not exist.
+devbox start --volume devbox-projects:/home/dev/Projects
+devbox shell Projects/path/to/project
+
+# Directory arguments use host paths in workspace mode and container paths in native mode.
+devbox exec --workdir ~/Projects/path/to/project -- make test
+devbox exec --workdir Projects/path/to/project -- make test  # native mode
+
+# Compose does not create external custom volumes.
+docker volume create devbox-projects
+devbox compose --volume devbox-projects:/home/dev/Projects > compose.yaml
 ```
 
 ### Environment forwarding

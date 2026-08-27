@@ -29,12 +29,12 @@ class ContainerPathTest(unittest.TestCase):
     def test_devbox_uses_converted_container_paths(self):
         devbox_class = DEVBOX["DevBox"]
 
-        with mock.patch.dict(devbox_class.__init__.__globals__, {"project_mount_path": lambda _path: r"C:\Users"}):
-            instance = devbox_class("start", project_dir=r"C:\Users\alex")
+        with mock.patch.dict(devbox_class.__init__.__globals__, {"workspace_mount_path": lambda _path: r"C:\Users"}):
+            instance = devbox_class("start", workspace_dir=r"C:\Users\alex")
 
-        self.assertEqual(instance.project_mount_dir, r"C:\Users")
-        self.assertEqual(instance.project_container_mount_dir, "/c/Users")
-        self.assertEqual(instance.project_container_dir, "/c/Users/alex")
+        self.assertEqual(instance.workspace_mount_dir, r"C:\Users")
+        self.assertEqual(instance.workspace_container_mount_dir, "/c/Users")
+        self.assertEqual(instance.workspace_container_dir, "/c/Users/alex")
 
 
 class HelperTest(unittest.TestCase):
@@ -78,6 +78,20 @@ class HelperTest(unittest.TestCase):
             ):
                 with self.subTest(unwanted=unwanted):
                     self.assertNotIn(unwanted, content)
+
+    def test_readme_documents_workspace_native_volume_and_exec_usage(self):
+        readme = (Path(__file__).parents[1] / "README.md").read_text()
+
+        for example in (
+            "devbox start --workspace",
+            "devbox start --volume",
+            "devbox shell",
+            "devbox exec --workdir",
+            "docker volume create devbox-projects",
+            "devbox compose --volume",
+        ):
+            with self.subTest(example=example):
+                self.assertIn(example, readme)
 
     def test_dockerfile_disables_cellar_telemetry_as_dev_user(self):
         dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
@@ -278,6 +292,27 @@ class HelperTest(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "Duplicate mount target"):
                 parse_mounts([f"{temp_dir}:/home/dev/data", f"{temp_dir}:/home/dev/data"])
 
+    def test_parse_named_volumes_normalizes_home_paths_and_options(self):
+        parse_named_volumes = DEVBOX["parse_named_volumes"]
+
+        volumes = parse_named_volumes(["projects:~/projects", "cache:~/cache:ro", "build:/var/build:rw"])
+
+        self.assertEqual(
+            [(volume.source, volume.target, volume.options) for volume in volumes],
+            [("projects", "/home/dev/projects", ""), ("cache", "/home/dev/cache", "ro"), ("build", "/var/build", "rw")],
+        )
+
+    def test_parse_named_volumes_rejects_reserved_names_and_target_collisions(self):
+        parse_named_volumes = DEVBOX["parse_named_volumes"]
+        mount = DEVBOX["Mount"]("/host:/data", "/host", "/data", "")
+
+        for specification in ("devbox-home:/data", "devbox-home-old:/data", "projects:/home/dev", "projects:relative", "projects:/data:z"):
+            with self.subTest(specification=specification), self.assertRaisesRegex(SystemExit, "(?:reserved|home/dev|absolute|options)"):
+                parse_named_volumes([specification], [mount])
+
+        with self.assertRaisesRegex(SystemExit, "Duplicate mount target"):
+            parse_named_volumes(["projects:/data"], [mount])
+
 
 class InspectTest(unittest.TestCase):
     def test_inspect_objects_accepts_docker_list_and_podman_object(self):
@@ -303,7 +338,7 @@ class InspectTest(unittest.TestCase):
                 self.assertEqual(instance.inspect_objects("devbox"), [])
 
     def test_workspace_mount_selects_mount_containing_workdir(self):
-        instance = new_devbox()
+        instance = new_devbox(workspace_dir="/project")
         container = {
             "Config": {"WorkingDir": "/workspace/repo"},
             "Mounts": [
@@ -316,7 +351,7 @@ class InspectTest(unittest.TestCase):
             self.assertEqual(instance.container_workspace_mount(), ("/host/workspace", "/workspace"))
 
     def test_container_directory_rejects_path_outside_workspace(self):
-        instance = new_devbox()
+        instance = new_devbox(workspace_dir=r"C:\Users\alex")
         globals_ = instance.container_directory.__globals__
 
         with mock.patch.object(instance, "container_workspace_mount", return_value=("/project", "/project")), mock.patch.dict(
@@ -328,7 +363,7 @@ class InspectTest(unittest.TestCase):
         self.assertIn("outside the started workspace", stderr.getvalue())
 
     def test_container_directory_converts_windows_relative_separators(self):
-        instance = new_devbox()
+        instance = new_devbox(workspace_dir="/home/alex")
         globals_ = instance.container_directory.__globals__
 
         with mock.patch.object(
@@ -349,7 +384,7 @@ class InspectTest(unittest.TestCase):
         self.assertEqual(container_directory, "/c/Users/alex/Developer/monix")
 
     def test_container_directory_preserves_backslashes_in_posix_filename(self):
-        instance = new_devbox()
+        instance = new_devbox(workspace_dir="/home/alex")
         globals_ = instance.container_directory.__globals__
 
         with mock.patch.object(
@@ -459,6 +494,41 @@ class ConfigurationTest(unittest.TestCase):
             instance.compose_service()
 
         self.assertIn(DEVBOX["MOUNTS_LABEL"], stdout.getvalue())
+
+    def test_compose_native_mode_omits_workspace_bind_and_declares_external_volume(self):
+        instance = new_devbox("compose")
+        instance.mode = "container-native"
+        instance.named_volumes = [
+            DEVBOX["Mount"]("projects:~/projects:ro", "projects", "/home/dev/projects", "ro", "volume")
+        ]
+
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            instance.compose_file()
+
+        output = stdout.getvalue()
+        self.assertNotIn('source: ""', output)
+        self.assertIn("type: volume", output)
+        self.assertIn("target: \"/home/dev/projects\"", output)
+        self.assertIn("read_only: true", output)
+        key = instance.compose_volume_key("projects")
+        self.assertIn(f"source: \"{key}\"", output)
+        self.assertIn(f"  {key}:\n    name: \"projects\"\n    external: true", output)
+        self.assertIn('org.alexn.devbox: "true"', output)
+        self.assertNotIn('org.alexn.devbox: "true"', output[output.index(f"  {key}:"):])
+
+    def test_compose_workspace_mode_uses_workspace_workdir_and_bind(self):
+        instance = new_devbox("compose", workspace_dir="/host/workspace")
+        instance.workspace_mount_dir = "/host"
+        instance.workspace_container_mount_dir = "/workspace"
+        instance.workspace_container_dir = "/workspace/workspace"
+
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            instance.compose_service()
+
+        output = stdout.getvalue()
+        self.assertIn('working_dir: "/workspace/workspace"', output)
+        self.assertIn('source: "/host"', output)
+        self.assertIn('target: "/workspace"', output)
 
     def test_wireguard_is_disabled_without_configuration(self):
         instance = new_devbox()
@@ -620,12 +690,67 @@ class ConfigurationTest(unittest.TestCase):
 
 
 class ContainerExecutionTest(unittest.TestCase):
+    def test_container_native_paths_resolve_without_host_preflight(self):
+        instance = new_devbox("exec", execution_dir="~/projects", container_cli="docker")
+        instance.mode = "container-native"
+
+        with mock.patch.object(DEVBOX["os"].path, "isdir", side_effect=AssertionError("host preflight")):
+            self.assertEqual(instance.container_directory("~/projects/../src"), "/home/dev/src")
+            self.assertEqual(instance.container_directory("./cache"), "/home/dev/cache")
+            self.assertEqual(instance.container_directory("/tmp/../var"), "/var")
+
+    def test_native_container_run_omits_workspace_bind_and_symlink(self):
+        instance = new_devbox("start", container_cli="docker")
+        instance.mode = "container-native"
+
+        with mock.patch.object(instance, "run_cli") as run_cli:
+            instance.run_new_container()
+
+        command = run_cli.call_args.args[0]
+        self.assertNotIn("/workspace", command)
+        self.assertNotIn("ln -s", command)
+        self.assertIn("-w", command)
+        self.assertEqual(command[command.index("-w") + 1], "/home/dev")
+
+    def test_named_volume_runtime_mount_and_initialization(self):
+        instance = new_devbox("start", container_cli="docker")
+        instance.mode = "container-native"
+        instance.named_volumes = [
+            DEVBOX["Mount"]("projects:~/projects", "projects", "/home/dev/projects", "", "volume"),
+            DEVBOX["Mount"]("cache:~/cache:ro", "cache", "/home/dev/cache", "ro", "volume"),
+        ]
+
+        with mock.patch.object(instance, "run_cli") as run_cli:
+            instance.run_new_container()
+
+        command = run_cli.call_args.args[0]
+        self.assertIn("projects:/home/dev/projects", command)
+        startup = command[-1]
+        self.assertIn("find /home/dev/projects -mindepth 1 -maxdepth 1", startup)
+        self.assertIn("chown dev:dev /home/dev/projects", startup)
+        self.assertIn("cache:/home/dev/cache:ro", command)
+        self.assertNotIn("/home/dev/cache", startup)
+        self.assertNotIn("chown -R", startup)
+
+    def test_workspace_runtime_records_mode_and_requested_workspace_labels(self):
+        instance = new_devbox("start", workspace_dir="/host/workspace", container_cli="docker")
+        instance.workspace_mount_dir = "/host"
+        instance.workspace_container_mount_dir = "/workspace"
+        instance.workspace_container_dir = "/workspace/workspace"
+
+        with mock.patch.object(instance, "run_cli") as run_cli:
+            instance.run_new_container()
+
+        command = run_cli.call_args.args[0]
+        self.assertIn(f"{DEVBOX['MODE_LABEL']}=workspace", command)
+        self.assertIn(f"{DEVBOX['WORKSPACE_LABEL']}=/host/workspace", command)
+        self.assertIn("/host:/workspace", command)
+        self.assertIn("-w", command)
+        self.assertEqual(command[command.index("-w") + 1], "/workspace/workspace")
+
     def test_custom_mounts_add_canonical_label_and_runtime_volume_arguments(self):
         mount = DEVBOX["Mount"]("/host:/home/dev/data:ro", "/host", "/home/dev/data", "ro")
         instance = new_devbox(container_cli="docker")
-        instance.project_mount_dir = "/project"
-        instance.project_container_mount_dir = "/project"
-        instance.project_container_dir = "/project"
         instance.mounts = [mount]
 
         with mock.patch.object(instance, "run_cli") as run_cli:
@@ -668,6 +793,47 @@ class ContainerExecutionTest(unittest.TestCase):
 
         self.assertIn("purge", stderr.getvalue())
 
+    def test_named_volume_label_mismatch_requires_purge(self):
+        instance = new_devbox("start", container_cli="docker")
+        instance.named_volumes = [
+            DEVBOX["Mount"]("projects:~/projects", "projects", "/home/dev/projects", "", "volume")
+        ]
+        container = {
+            "Config": {
+                "WorkingDir": "/home/dev",
+                "Labels": {DEVBOX["MOUNTS_LABEL"]: "[]"},
+            },
+            "Mounts": [{"Name": "devbox-home", "Destination": "/home/dev"}],
+        }
+
+        with mock.patch.object(instance, "container_exists", return_value=True), mock.patch.object(
+            instance, "container_inspect", return_value=container
+        ), mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            with self.assertRaisesRegex(SystemExit, "1"):
+                instance.start_container(announce=False)
+
+        self.assertIn("purge", stderr.getvalue())
+
+    def test_reusing_container_from_other_mode_requires_purge(self):
+        instance = new_devbox("start", workspace_dir="/host/workspace", container_cli="docker")
+        container = {
+            "Config": {
+                "WorkingDir": "/home/dev",
+                "Labels": {DEVBOX["MODE_LABEL"]: "container-native"},
+            },
+            "Mounts": [{"Name": "devbox-home", "Destination": "/home/dev"}],
+        }
+
+        with mock.patch.object(instance, "container_exists", return_value=True), mock.patch.object(
+            instance, "container_inspect", return_value=container
+        ), mock.patch(
+            "sys.stderr", new_callable=io.StringIO
+        ) as stderr:
+            with self.assertRaisesRegex(SystemExit, "1"):
+                instance.start_container(announce=False)
+
+        self.assertIn("purge", stderr.getvalue())
+
     def test_nested_sandbox_mismatch_requires_purge(self):
         instance = new_devbox(container_cli="docker")
         instance.nested_sandbox = True
@@ -684,9 +850,6 @@ class ContainerExecutionTest(unittest.TestCase):
 
     def test_nested_sandbox_adds_runtime_arguments(self):
         instance = new_devbox(container_cli="docker")
-        instance.project_mount_dir = "/project"
-        instance.project_container_mount_dir = "/project"
-        instance.project_container_dir = "/project"
         instance.nested_sandbox = True
 
         with mock.patch.object(instance, "run_cli") as run_cli:
@@ -699,11 +862,11 @@ class ContainerExecutionTest(unittest.TestCase):
         self.assertIn("seccomp=unconfined", command)
         self.assertIn("apparmor=unconfined", command)
 
-    def test_project_mount_accepts_docker_desktop_macos_source(self):
-        instance = new_devbox(container_cli="docker")
-        instance.project_mount_dir = "/Users/alex/Developer"
-        instance.project_container_mount_dir = "/Users/alex/Developer"
-        instance.project_container_dir = "/Users/alex/Developer"
+    def test_workspace_mount_accepts_docker_desktop_macos_source(self):
+        instance = new_devbox(container_cli="docker", workspace_dir="/Users/alex/Developer")
+        instance.workspace_mount_dir = "/Users/alex/Developer"
+        instance.workspace_container_mount_dir = "/Users/alex/Developer"
+        instance.workspace_container_dir = "/Users/alex/Developer"
         container = {
             "Config": {"WorkingDir": "/Users/alex/Developer"},
             "Mounts": [
@@ -717,13 +880,13 @@ class ContainerExecutionTest(unittest.TestCase):
         with mock.patch.object(DEVBOX["sys"], "platform", "darwin"), mock.patch.object(
             DEVBOX["os"].path, "realpath", side_effect=lambda path: path
         ), mock.patch.object(instance, "container_inspect", return_value=container):
-            instance.ensure_project_mount()
+            instance.ensure_workspace_configuration()
 
-    def test_project_mount_mismatch_reports_running_and_current_configuration(self):
-        instance = new_devbox(container_cli="docker")
-        instance.project_mount_dir = "/current/workspace"
-        instance.project_container_mount_dir = "/current/workspace"
-        instance.project_container_dir = "/current/workspace/project"
+    def test_workspace_mount_mismatch_reports_running_and_current_configuration(self):
+        instance = new_devbox(container_cli="docker", workspace_dir="/current/workspace")
+        instance.workspace_mount_dir = "/current/workspace"
+        instance.workspace_container_mount_dir = "/current/workspace"
+        instance.workspace_container_dir = "/current/workspace/project"
         container = {
             "Config": {"WorkingDir": "/running/workspace/project"},
             "Mounts": [
@@ -735,15 +898,15 @@ class ContainerExecutionTest(unittest.TestCase):
             "sys.stderr", new_callable=io.StringIO
         ) as stderr:
             with self.assertRaisesRegex(SystemExit, "1"):
-                instance.ensure_project_mount()
+                instance.ensure_workspace_configuration()
 
         output = stderr.getvalue()
         for expected in (
             "Running container configuration:",
-            "Project: /running/workspace -> /running/workspace",
+            "Workspace: /running/workspace -> /running/workspace",
             "Workdir: /running/workspace/project",
             "Current configuration:",
-            "Project: /current/workspace -> /current/workspace",
+            "Workspace: /current/workspace -> /current/workspace",
             "Workdir: /current/workspace/project",
         ):
             self.assertIn(expected, output)
@@ -800,6 +963,21 @@ class ContainerExecutionTest(unittest.TestCase):
         container_directory.assert_called_once_with(".")
         self.assertEqual(instance.execution_dir, "/workspace/project")
         exec_container.assert_called_once_with(["bash"])
+
+    def test_purge_all_collects_managed_home_volume_not_custom_named_volume(self):
+        instance = new_devbox("purge-all", container_cli="docker")
+        container = {
+            "Mounts": [
+                {"Name": "devbox-home", "Destination": "/home/dev"},
+                {"Name": "projects", "Destination": "/home/dev/Projects"},
+            ]
+        }
+        volume_names = []
+
+        with mock.patch.object(instance, "inspect_object", return_value=container):
+            instance.collect_container_home_volumes(volume_names, "container-id")
+
+        self.assertEqual(volume_names, ["devbox-home"])
 
 
 class StatusTest(unittest.TestCase):
@@ -869,6 +1047,30 @@ class StatusTest(unittest.TestCase):
         self.assertIn("Status:    exited (exit code 127)", stdout.getvalue())
         self.assertIn("Finished:  today", stdout.getvalue())
 
+    def test_status_reports_container_native_mode_and_custom_volume_mapping(self):
+        instance = new_devbox("status", container_cli="docker")
+        container = {
+            "Config": {
+                "Labels": {DEVBOX["MODE_LABEL"]: "container-native"},
+                "WorkingDir": "/home/dev",
+            },
+            "State": {"Running": True, "Status": "running"},
+            "Mounts": [
+                {"Name": "devbox-home", "Destination": "/home/dev", "RW": True},
+                {"Name": "projects", "Destination": "/home/dev/projects", "RW": True},
+            ],
+        }
+
+        with mock.patch.object(instance, "container_inspect", return_value=container), mock.patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout:
+            instance.status_container()
+
+        output = stdout.getvalue()
+        self.assertIn("Mode:      container-native", output)
+        self.assertIn("Workdir:   /home/dev", output)
+        self.assertIn("projects -> /home/dev/projects (rw)", output)
+
 
 class ParserTest(unittest.TestCase):
     def test_status_parses_without_arguments(self):
@@ -876,11 +1078,26 @@ class ParserTest(unittest.TestCase):
 
         self.assertEqual(namespace.command, "status")
 
-    def test_start_requires_and_parses_project_directory(self):
-        namespace = DEVBOX["build_parser"]().parse_args(["start", "."])
+    def test_start_and_compose_parse_optional_workspace(self):
+        parser = DEVBOX["build_parser"]()
 
-        self.assertEqual(namespace.command, "start")
-        self.assertEqual(namespace.project_directory, ".")
+        for command in ("start", "compose"):
+            with self.subTest(command=command):
+                namespace = parser.parse_args([command, "--workspace", "/tmp/workspace"])
+                self.assertEqual(namespace.command, command)
+                self.assertEqual(namespace.workspace, "/tmp/workspace")
+
+    def test_start_and_compose_without_workspace_create_native_instances_and_reject_positional_workspace(self):
+        parser = DEVBOX["build_parser"]()
+
+        for command in ("start", "compose"):
+            with self.subTest(command=command):
+                namespace = parser.parse_args([command])
+                instance = DEVBOX["create_devbox"](namespace, "docker")
+                self.assertEqual(instance.mode, "container-native")
+                self.assertEqual(instance.workspace_dir, "")
+                with mock.patch("sys.stderr", new_callable=io.StringIO), self.assertRaises(SystemExit):
+                    parser.parse_args([command, "workspace"])
 
     def test_start_and_compose_parse_repeated_mount_options(self):
         parser = DEVBOX["build_parser"]()
@@ -888,7 +1105,7 @@ class ParserTest(unittest.TestCase):
         for command in ("start", "compose"):
             with self.subTest(command=command):
                 namespace = parser.parse_args(
-                    [command, "--mount", "/one:/home/dev/one", "--mount", "/two:/home/dev/two:ro", "."]
+                    [command, "--mount", "/one:/home/dev/one", "--mount", "/two:/home/dev/two:ro"]
                 )
                 self.assertEqual(namespace.mounts, ["/one:/home/dev/one", "/two:/home/dev/two:ro"])
 
@@ -897,13 +1114,46 @@ class ParserTest(unittest.TestCase):
 
         for command in ("start", "compose"):
             with self.subTest(command=command):
-                namespace = parser.parse_args([command, "--nested-sandbox", "."])
+                namespace = parser.parse_args([command, "--nested-sandbox"])
                 self.assertTrue(namespace.nested_sandbox)
+
+    def test_start_and_compose_parse_repeated_named_volumes(self):
+        parser = DEVBOX["build_parser"]()
+
+        for command in ("start", "compose"):
+            with self.subTest(command=command):
+                namespace = parser.parse_args(
+                    [command, "--volume", "projects:~/projects:ro", "--volume", "cache:/cache"]
+                )
+                self.assertEqual(namespace.volumes, ["projects:~/projects:ro", "cache:/cache"])
 
     def test_exec_preserves_passthrough_arguments(self):
         namespace = DEVBOX["build_parser"]().parse_args(["exec", "python", "-c", "print('ok')"])
 
         self.assertEqual(namespace.command_args, ["python", "-c", "print('ok')"])
+
+    def test_exec_parses_workdir_and_optional_delimiter(self):
+        namespace = DEVBOX["build_parser"]().parse_args(
+            ["exec", "--workdir", "~/projects", "--", "python", "-c", "print('ok')"]
+        )
+
+        self.assertEqual(namespace.execution_dir, "~/projects")
+        self.assertEqual(namespace.command_args, ["--", "python", "-c", "print('ok')"])
+
+    def test_exec_defaults_workdir_and_create_strips_optional_delimiter(self):
+        namespace = DEVBOX["build_parser"]().parse_args(["exec", "--", "python", "-c", "print('ok')"])
+        instance = DEVBOX["create_devbox"](namespace, "docker")
+
+        self.assertEqual(namespace.execution_dir, ".")
+        self.assertEqual(instance.execution_dir, ".")
+        self.assertEqual(instance.command_args, ["python", "-c", "print('ok')"])
+
+    def test_exec_treats_path_like_command_as_command(self):
+        namespace = DEVBOX["build_parser"]().parse_args(["exec", "./script", "--flag"])
+        instance = DEVBOX["create_devbox"](namespace, "docker")
+
+        self.assertEqual(instance.execution_dir, ".")
+        self.assertEqual(instance.command_args, ["./script", "--flag"])
 
 
 if __name__ == "__main__":

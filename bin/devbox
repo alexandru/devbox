@@ -4,6 +4,7 @@
 
 import argparse
 from dataclasses import dataclass
+import hashlib
 import json
 import os
 import posixpath
@@ -25,8 +26,9 @@ HOME_VOLUME_LABEL = "org.alexn.devbox.home-volume"
 MOUNTS_LABEL = "org.alexn.devbox.mounts"
 NESTED_SANDBOX_LABEL = "org.alexn.devbox.nested-sandbox"
 EXTRA_ARGS_LABEL = "org.alexn.devbox.extra-args"
+MODE_LABEL = "org.alexn.devbox.mode"
+WORKSPACE_LABEL = "org.alexn.devbox.workspace"
 WORKSPACE_LINK = "/workspace"
-EXEC_WORKDIR = "/workspace"
 CONTAINER_USER = "dev"
 ROOT_USER = "root"
 
@@ -50,6 +52,7 @@ class Mount:
     source: str
     target: str
     options: str
+    kind: str = "bind"
 
     def volume_spec(self):
         suffix = f":{self.options}" if self.options else ""
@@ -75,8 +78,8 @@ def canonical_file(path, description):
     return os.path.realpath(path)
 
 
-def project_path(path):
-    return canonical_dir(path, "Project")
+def workspace_path(path):
+    return canonical_dir(path, "Workspace")
 
 
 def path_is_within(path, parent):
@@ -86,10 +89,10 @@ def path_is_within(path, parent):
         return False
 
 
-def git_rev_parse_dir(project_dir, option):
+def git_rev_parse_dir(workspace_dir, option):
     try:
         result = subprocess.run(
-            ["git", "-C", project_dir, "rev-parse", "--path-format=absolute", option],
+            ["git", "-C", workspace_dir, "rev-parse", "--path-format=absolute", option],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
@@ -108,11 +111,11 @@ def git_rev_parse_dir(project_dir, option):
     return os.path.realpath(path)
 
 
-def project_mount_path(project_dir):
-    paths = [project_dir]
+def workspace_mount_path(workspace_dir):
+    paths = [workspace_dir]
 
     for option in ("--git-dir", "--git-common-dir"):
-        path = git_rev_parse_dir(project_dir, option)
+        path = git_rev_parse_dir(workspace_dir, option)
         if path:
             paths.append(path)
 
@@ -210,6 +213,60 @@ def parse_mounts(specifications):
     return mounts
 
 
+VOLUME_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
+
+
+def split_volume_specification(specification):
+    parts = specification.split(":")
+    if len(parts) > 3 or len(parts) < 2 or not parts[0] or not parts[1]:
+        raise SystemExit(
+            f"Invalid volume specification: {specification}. Expected NAME:CONTAINER[:OPTIONS]."
+        )
+    name, target = parts[:2]
+    options = parts[2] if len(parts) == 3 else ""
+    if len(parts) == 3 and not options:
+        raise SystemExit(
+            f"Invalid volume specification: {specification}. Expected NAME:CONTAINER[:OPTIONS]."
+        )
+    if not VOLUME_NAME_PATTERN.fullmatch(name):
+        raise SystemExit(f"Invalid named volume name: {name}")
+    if options not in {"", "ro", "rw"}:
+        raise SystemExit(f"Invalid named volume options: {options}. Expected ro or rw.")
+    return name, target, options
+
+
+def expand_container_home(path):
+    if path == "~":
+        return "/home/dev"
+    if path.startswith("~/"):
+        return posixpath.normpath(posixpath.join("/home/dev", path[2:]))
+    return path
+
+
+def normalize_home_path(path):
+    path = expand_container_home(path)
+    if posixpath.isabs(path):
+        return posixpath.normpath(path)
+    raise SystemExit(f"Named volume target must be an absolute container path or ~/...: {path}")
+
+
+def parse_named_volumes(specifications, mounts=()):
+    volumes = []
+    targets = {mount.target for mount in mounts}
+    for specification in specifications:
+        name, target, options = split_volume_specification(specification)
+        target = normalize_home_path(target)
+        if target == "/home/dev":
+            raise SystemExit("Named volume target /home/dev conflicts with the managed home volume")
+        if name == HOME_VOLUME_NAME or name.startswith(LEGACY_HOME_VOLUME_PREFIX):
+            raise SystemExit(f"Named volume name is reserved for Devbox home cleanup: {name}")
+        if target in targets:
+            raise SystemExit(f"Duplicate mount target: {target}")
+        targets.add(target)
+        volumes.append(Mount(specification, name, target, options, "volume"))
+    return volumes
+
+
 def has_ssh_auth_sock():
     path = os.environ.get("SSH_AUTH_SOCK", "")
     if not path:
@@ -239,18 +296,27 @@ def ordered_add(values, value):
 
 
 class DevBox:
-    def __init__(self, command, project_dir="", command_args=None, container_cli=None, execution_dir=""):
+    def __init__(
+        self,
+        command,
+        workspace_dir="",
+        command_args=None,
+        container_cli=None,
+        execution_dir="",
+    ):
         self.command = command
-        self.project_dir = project_dir
-        self.project_mount_dir = project_mount_path(project_dir) if project_dir else ""
-        self.project_container_dir = container_path(project_dir)
-        self.project_container_mount_dir = container_path(self.project_mount_dir)
+        self.workspace_dir = workspace_dir
+        self.workspace_mount_dir = workspace_mount_path(workspace_dir) if workspace_dir else ""
+        self.workspace_container_dir = container_path(workspace_dir)
+        self.workspace_container_mount_dir = container_path(self.workspace_mount_dir)
+        self.mode = "workspace" if workspace_dir else ("container-native" if command in {"start", "compose"} else "")
         self.command_args = list(command_args or [])
         self.execution_dir = execution_dir
         self.container_cli = container_cli or ""
         self.container_name = CONTAINER_NAME
         self.home_volume = home_volume()
         self.mounts = []
+        self.named_volumes = []
         self.agent_port = ""
         self.container_env_args = []
         self.wireguard_config_host_path = ""
@@ -365,13 +431,13 @@ class DevBox:
         if container:
             print(f"Container is not running: {self.container_name}", file=sys.stderr)
             print(
-                f"Run `{sys.argv[0]} start <project-directory>` to start it.",
+                f"Run `{sys.argv[0]} start [--workspace HOST_DIR]` to start it.",
                 file=sys.stderr,
             )
         else:
             print(f"Container does not exist: {self.container_name}", file=sys.stderr)
             print(
-                f"Run `{sys.argv[0]} start <project-directory>` to create it.",
+                f"Run `{sys.argv[0]} start [--workspace HOST_DIR]` to create it.",
                 file=sys.stderr,
             )
         raise SystemExit(1)
@@ -390,8 +456,14 @@ class DevBox:
 
         candidates = []
         for mount in container.get("Mounts", []):
+            if mount.get("Type", "bind") != "bind":
+                continue
+            if not mount.get("Type") and mount.get("Name"):
+                continue
             source = normalize_container_path(mount.get("Source", ""))
             destination = mount.get("Destination", "")
+            if destination == "/home/dev":
+                continue
             if not source or not destination:
                 continue
             if not posixpath.commonpath([workdir, destination]) == destination:
@@ -411,7 +483,27 @@ class DevBox:
             raise SystemExit(1)
         return mount
 
+    def container_mode(self, container=None):
+        container = container or self.container_inspect()
+        labels = container.get("Config", {}).get("Labels", {}) or {}
+        mode = labels.get(MODE_LABEL, "")
+        if mode in {"workspace", "container-native"}:
+            return mode
+        if container.get("Config", {}).get("WorkingDir", "") == "/home/dev":
+            return "container-native"
+        return "workspace" if self.workspace_mount(container)[0] else "container-native"
+
+    def native_container_directory(self, path):
+        path = expand_container_home(path)
+        if posixpath.isabs(path):
+            return posixpath.normpath(path)
+        return posixpath.normpath(posixpath.join("/home/dev", path))
+
     def container_directory(self, host_directory):
+        if self.mode == "container-native" or (
+            not self.mode and self.container_mode() == "container-native"
+        ):
+            return self.native_container_directory(host_directory)
         requested_dir = canonical_dir(host_directory, "Requested")
         host_mount_dir, container_mount_dir = self.container_workspace_mount()
 
@@ -437,10 +529,12 @@ class DevBox:
         return [binding.get("HostPort", "") for binding in bindings if binding.get("HostPort")]
 
     def mount_label(self):
-        metadata = [
-            {"source": mount.source, "target": mount.target, "options": mount.options}
-            for mount in self.mounts
-        ]
+        metadata = []
+        for mount in [*self.mounts, *self.named_volumes]:
+            item = {"source": mount.source, "target": mount.target, "options": mount.options}
+            if mount.kind != "bind":
+                item["type"] = mount.kind
+            metadata.append(item)
         return json.dumps(
             sorted(metadata, key=lambda mount: (mount["target"], mount["source"], mount["options"])),
             separators=(",", ":"),
@@ -525,30 +619,48 @@ class DevBox:
         )
         raise SystemExit(1)
 
-    def ensure_project_mount(self):
+    def ensure_workspace_configuration(self):
         container = self.container_inspect()
-        running_mount_source, running_mount_destination = self.workspace_mount(container)
+        running_mode = self.container_mode(container)
+        running_labels = container.get("Config", {}).get("Labels", {}) or {}
+        if running_mode == "workspace":
+            running_mount_source, running_mount_destination = self.workspace_mount(container)
+        else:
+            running_mount_source, running_mount_destination = "", ""
         running_workdir = container.get("Config", {}).get("WorkingDir", "")
-        current_mount = (self.project_mount_dir, self.project_container_mount_dir)
+        current_mount = (self.workspace_mount_dir, self.workspace_container_mount_dir)
 
         if (
-            (running_mount_source, running_mount_destination) == current_mount
-            and running_workdir == self.project_container_dir
+            self.mode == running_mode == "container-native"
+            and not running_mount_source
+            and running_workdir == "/home/dev"
+        ):
+            return
+        if (
+            self.mode == running_mode == "workspace"
+            and (running_mount_source, running_mount_destination) == current_mount
+            and running_workdir == self.workspace_container_dir
+            and running_labels.get(WORKSPACE_LABEL, self.workspace_dir) == self.workspace_dir
         ):
             return
 
-        print("Container already exists with different project configuration.", file=sys.stderr)
+        print("Container already exists with different workspace configuration.", file=sys.stderr)
         print("Running container configuration:", file=sys.stderr)
+        print(f"  Mode: {running_mode}", file=sys.stderr)
         if running_mount_source and running_mount_destination:
-            print(f"  Project: {running_mount_source} -> {running_mount_destination}", file=sys.stderr)
+            print(f"  Workspace: {running_mount_source} -> {running_mount_destination}", file=sys.stderr)
         else:
-            print("  Project: not mounted", file=sys.stderr)
+            print("  Workspace: not mounted", file=sys.stderr)
         print(f"  Workdir: {running_workdir or 'not set'}", file=sys.stderr)
         print("Current configuration:", file=sys.stderr)
-        print(f"  Project: {self.project_mount_dir} -> {self.project_container_mount_dir}", file=sys.stderr)
-        print(f"  Workdir: {self.project_container_dir}", file=sys.stderr)
+        print(f"  Mode: {self.mode}", file=sys.stderr)
+        if self.mode == "workspace":
+            print(f"  Workspace: {self.workspace_mount_dir} -> {self.workspace_container_mount_dir}", file=sys.stderr)
+        else:
+            print("  Workspace: not mounted", file=sys.stderr)
+        print(f"  Workdir: {self.effective_workdir()}", file=sys.stderr)
         print(
-            f"Run `{sys.argv[0]} purge` and start it again to apply the current project configuration.",
+            f"Run `{sys.argv[0]} purge` and start it again to apply the current workspace configuration.",
             file=sys.stderr,
         )
         raise SystemExit(1)
@@ -560,7 +672,7 @@ class DevBox:
             print(f"WireGuard: attempting connection with MTU {self.wireguard_mtu}...")
 
         if self.container_exists():
-            self.ensure_project_mount()
+            self.ensure_workspace_configuration()
             self.ensure_custom_mounts()
             self.ensure_nested_sandbox()
             self.ensure_extra_args()
@@ -582,6 +694,9 @@ class DevBox:
 
         if announce:
             self.print_start_summary()
+
+    def effective_workdir(self):
+        return self.workspace_container_dir if self.mode == "workspace" else "/home/dev"
 
     def container_logs(self):
         result = self.run_cli(["logs", self.container_name], capture=True, stderr=subprocess.STDOUT)
@@ -632,9 +747,21 @@ class DevBox:
 
     def custom_mount_args(self):
         arguments = []
-        for mount in self.mounts:
+        for mount in [*self.mounts, *self.named_volumes]:
             arguments.extend(["-v", mount.volume_spec()])
         return arguments
+
+    def custom_volume_initialization(self):
+        commands = []
+        for volume in self.named_volumes:
+            if volume.options == "ro":
+                continue
+            target = shlex.quote(volume.target)
+            commands.append(
+                f"if [ -z \"$(find {target} -mindepth 1 -maxdepth 1 -print -quit)\" ]; "
+                f"then chown dev:dev {target}; fi"
+            )
+        return " && ".join(commands)
 
     def agent_port_args(self):
         if not self.agent_port:
@@ -688,6 +815,11 @@ class DevBox:
             print(f"Started:   {state['StartedAt']}")
         if not running and state.get("FinishedAt"):
             print(f"Finished:  {state['FinishedAt']}")
+        mode = self.container_mode(container)
+        print(f"Mode:      {mode}")
+        if mode == "workspace":
+            workspace_source, workspace_target = self.workspace_mount(container)
+            print(f"Workspace: {workspace_source} -> {workspace_target}")
         if config.get("WorkingDir"):
             print(f"Workdir:   {config['WorkingDir']}")
 
@@ -700,6 +832,19 @@ class DevBox:
                 if source and destination:
                     mode = "rw" if mount.get("RW", True) else "ro"
                     print(f"  {source} -> {destination} ({mode})")
+
+            custom_volumes = [
+                mount
+                for mount in mounts
+                if mount.get("Destination") != "/home/dev"
+                and (mount.get("Type") == "volume" or mount.get("Name"))
+            ]
+            if custom_volumes:
+                print("Custom volumes:")
+                for mount in custom_volumes:
+                    source = mount.get("Name", "")
+                    mode = "rw" if mount.get("RW", True) else "ro"
+                    print(f"  {source} -> {mount.get('Destination', '')} ({mode})")
 
         ports = self.container_agent_ports(container)
         if ports:
@@ -782,11 +927,17 @@ class DevBox:
         )
 
     def workspace_link_command(self):
-        command = (
-            f"rm -rf {WORKSPACE_LINK} && "
-            f"ln -s {shlex.quote(self.project_container_dir)} {WORKSPACE_LINK} && "
-            "exec sleep infinity"
-        )
+        initialization = self.custom_volume_initialization()
+        if self.mode == "workspace":
+            command = (
+                f"rm -rf {WORKSPACE_LINK} && "
+                f"ln -s {shlex.quote(self.workspace_container_dir)} {WORKSPACE_LINK} && "
+                "exec sleep infinity"
+            )
+        else:
+            command = "exec sleep infinity"
+        if initialization:
+            command = f"{initialization} && {command}"
         if self.wireguard_enabled():
             config_command = ""
             if self.wireguard_config_str:
@@ -803,6 +954,12 @@ class DevBox:
         return command
 
     def run_new_container(self):
+        workspace_args = []
+        if self.mode == "workspace":
+            workspace_args = [
+                "-v",
+                f"{self.workspace_mount_dir}:{self.workspace_container_mount_dir}",
+            ]
         self.run_cli(
             [
                 "run",
@@ -819,10 +976,13 @@ class DevBox:
                 f"{NESTED_SANDBOX_LABEL}={str(self.nested_sandbox).lower()}",
                 "--label",
                 f"{EXTRA_ARGS_LABEL}={self.extra_args_label()}",
+                "--label",
+                f"{MODE_LABEL}={self.mode}",
+                "--label",
+                f"{WORKSPACE_LABEL}={self.workspace_dir}",
                 "--user",
                 ROOT_USER,
-                "-v",
-                f"{self.project_mount_dir}:{self.project_container_mount_dir}",
+                *workspace_args,
                 "-v",
                 f"{self.home_volume}:/home/dev",
                 *self.ssh_args(),
@@ -833,7 +993,7 @@ class DevBox:
                 *self.wireguard_args(),
                 *self.extra_args,
                 "-w",
-                self.project_container_dir,
+                self.effective_workdir(),
                 IMAGE,
                 "/bin/sh",
                 "-lc",
@@ -845,17 +1005,22 @@ class DevBox:
 
     def print_start_summary(self):
         print(f"Container: {self.container_name}")
-        print(f"Project:   {self.project_mount_dir} -> {self.project_container_mount_dir}")
-        print(f"Workdir:   {self.project_container_dir}")
-        print(f"Symlink:   {WORKSPACE_LINK} -> {self.project_container_dir}")
+        print(f"Mode:      {self.mode}")
+        if self.mode == "workspace":
+            print(f"Workspace: {self.workspace_mount_dir} -> {self.workspace_container_mount_dir}")
+            print(f"Symlink:   {WORKSPACE_LINK} -> {self.workspace_container_dir}")
+        print(f"Workdir:   {self.effective_workdir()}")
         print(f"Home:      {self.home_volume} -> /home/dev")
+        for volume in self.named_volumes:
+            mode = volume.options or "rw"
+            print(f"Volume:    {volume.source} -> {volume.target} ({mode})")
         print(
             "Shell:     "
             f"{shlex.quote(self.container_cli)} exec -it {shlex.quote(self.container_name)} bash"
         )
 
     def exec_container(self, args):
-        workdir = self.execution_dir or self.project_container_dir or EXEC_WORKDIR
+        workdir = self.execution_dir or self.effective_workdir()
         command = [
             self.container_cli,
             "exec",
@@ -867,10 +1032,10 @@ class DevBox:
             "-e",
             f"TERM={os.environ.get('TERM') or 'xterm-256color'}",
             *self.container_env_args,
-                self.container_name,
+            self.container_name,
             "/usr/local/bin/devbox-entrypoint",
-                *args,
-            ]
+            *args,
+        ]
         if os.name == "nt":
             result = subprocess.run(command, check=False)
             raise SystemExit(result.returncode)
@@ -898,13 +1063,12 @@ class DevBox:
 
     def exec_command(self):
         self.assert_container_running()
-        if self.execution_dir:
-            self.execution_dir = self.container_directory(self.execution_dir)
+        self.execution_dir = self.container_directory(self.execution_dir or os.curdir)
         self.exec_container(self.command_args)
 
     def compose_file(self):
         self.compose_service()
-        self.compose_home_volume()
+        self.compose_volumes()
 
     def compose_service(self):
         print("services:")
@@ -912,7 +1076,7 @@ class DevBox:
         print(f'    image: "${{DEVBOX_IMAGE:-{DEFAULT_IMAGE}}}"')
         print(f"    container_name: {yaml_quote(self.container_name)}")
         print(f"    user: {yaml_quote(ROOT_USER)}")
-        print(f"    working_dir: {yaml_quote(self.project_container_dir)}")
+        print(f"    working_dir: {yaml_quote(self.effective_workdir())}")
         print("    command:")
         print("      - /bin/sh")
         print("      - -lc")
@@ -949,6 +1113,8 @@ class DevBox:
         print(f"      {MOUNTS_LABEL}: {yaml_quote(self.mount_label())}")
         print(f"      {NESTED_SANDBOX_LABEL}: {yaml_quote(str(self.nested_sandbox).lower())}")
         print(f"      {EXTRA_ARGS_LABEL}: {yaml_quote(self.extra_args_label())}")
+        print(f"      {MODE_LABEL}: {yaml_quote(self.mode)}")
+        print(f"      {WORKSPACE_LABEL}: {yaml_quote(self.workspace_dir)}")
 
         self.compose_environment()
         self.compose_mounts()
@@ -973,9 +1139,10 @@ class DevBox:
 
     def compose_mounts(self):
         print("    volumes:")
-        print("      - type: bind")
-        print(f"        source: {yaml_quote(self.project_mount_dir)}")
-        print(f"        target: {yaml_quote(self.project_container_mount_dir)}")
+        if self.mode == "workspace":
+            print("      - type: bind")
+            print(f"        source: {yaml_quote(self.workspace_mount_dir)}")
+            print(f"        target: {yaml_quote(self.workspace_container_mount_dir)}")
         print("      - type: volume")
         print("        source: home")
         print("        target: /home/dev")
@@ -991,6 +1158,13 @@ class DevBox:
             if mount.options == "ro":
                 print("        read_only: true")
 
+        for volume in self.named_volumes:
+            print("      - type: volume")
+            print(f"        source: {yaml_quote(self.compose_volume_key(volume.source))}")
+            print(f"        target: {yaml_quote(volume.target)}")
+            if volume.options == "ro":
+                print("        read_only: true")
+
         if self.wireguard_config_host_path:
             print("      - type: bind")
             print('        source: "${DEVBOX_WIREGUARD_CONFIG_PATH}"')
@@ -1002,13 +1176,21 @@ class DevBox:
             print('        source: "${SSH_AUTH_SOCK}"')
             print('        target: "${SSH_AUTH_SOCK}"')
 
-    def compose_home_volume(self):
+    def compose_volumes(self):
         print()
         print("volumes:")
         print("  home:")
         print(f"    name: {yaml_quote(self.home_volume)}")
         print("    labels:")
         print('      org.alexn.devbox: "true"')
+        for volume_name in sorted({volume.source for volume in self.named_volumes}):
+            print(f"  {self.compose_volume_key(volume_name)}:")
+            print(f"    name: {yaml_quote(volume_name)}")
+            print("    external: true")
+
+    def compose_volume_key(self, volume_name):
+        digest = hashlib.sha256(volume_name.encode()).hexdigest()[:12]
+        return f"custom_{digest}"
 
     def purge_container(self):
         if self.container_exists():
@@ -1026,7 +1208,7 @@ class DevBox:
         if not container:
             print(f"Container does not exist: {self.container_name}", file=sys.stderr)
             print(
-                f"Run `{sys.argv[0]} start <project-directory>` to create it.",
+                f"Run `{sys.argv[0]} start [--workspace HOST_DIR]` to create it.",
                 file=sys.stderr,
             )
             raise SystemExit(1)
@@ -1092,8 +1274,11 @@ class DevBox:
     def collect_container_home_volumes(self, volume_names, container_id):
         container = self.inspect_object(container_id)
         for mount in container.get("Mounts", []):
-            if mount.get("Destination") == "/home/dev":
-                ordered_add(volume_names, mount.get("Name", ""))
+            name = mount.get("Name", "")
+            if mount.get("Destination") == "/home/dev" and (
+                name == HOME_VOLUME_NAME or name.startswith(LEGACY_HOME_VOLUME_PREFIX)
+            ):
+                ordered_add(volume_names, name)
 
     def purge_volume(self, volume_name):
         if self.run_cli(
@@ -1173,8 +1358,15 @@ def build_parser():
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    def add_project_command(name, help_text):
+    def add_workspace_command(name, help_text):
         command_parser = subparsers.add_parser(name, help=help_text, description=help_text)
+        command_parser.add_argument(
+            "--workspace",
+            dest="workspace",
+            default="",
+            metavar="HOST_DIR",
+            help="Use a canonical host directory as the workspace. Omit for container-native mode.",
+        )
         command_parser.add_argument(
             "--mount",
             dest="mounts",
@@ -1195,44 +1387,51 @@ def build_parser():
             metavar="ARG",
             help="Extra container run argument. Repeatable; passed to `docker run`/`podman run` as-is.",
         )
-        command_parser.add_argument("project_directory")
+        command_parser.add_argument(
+            "--volume",
+            dest="volumes",
+            action="append",
+            default=[],
+            metavar="NAME:CONTAINER[:OPTIONS]",
+            help="Mount a named volume. Repeatable; options are ro or rw.",
+        )
         return command_parser
 
     def add_simple_command(name, help_text):
         return subparsers.add_parser(name, help=help_text, description=help_text)
 
-    def add_passthrough_command(name, help_text):
-        command_parser = subparsers.add_parser(
-            name,
-            add_help=False,
-            help=help_text,
-            description=help_text,
-        )
-        command_parser.add_argument("command_args", nargs=argparse.REMAINDER)
-        return command_parser
+    exec_parser = subparsers.add_parser(
+        "exec",
+        add_help=False,
+        help="Run a command in the running devbox.",
+        description="Run a command in the running devbox.",
+    )
+    exec_parser.add_argument(
+        "--workdir",
+        dest="execution_dir",
+        default=os.curdir,
+        metavar="DIRECTORY",
+        help="Directory for the command. Host path in workspace mode, container path otherwise.",
+    )
+    exec_parser.add_argument("command_args", nargs=argparse.REMAINDER)
 
-    add_project_command("start", "Start the devbox for a project.")
-    add_project_command("compose", "Print a docker-compose.yaml for the devbox to stdout.")
+    add_workspace_command("start", "Start the devbox.")
+    add_workspace_command("compose", "Print a docker-compose.yaml for the devbox to stdout.")
 
     add_simple_command("stop", "Stop the devbox.")
     add_simple_command("status", "Show devbox container and runtime status.")
     add_simple_command("restart", "Restart the devbox; fails if it does not exist.")
     shell_parser = add_simple_command(
         "shell",
-        "Open an interactive shell in the running devbox at a workspace directory.",
+        "Open an interactive shell in the running devbox at a selected directory.",
     )
     shell_parser.add_argument(
         "directory",
         nargs="?",
         default=os.curdir,
-        help="Host directory under the workspace started by `start` (defaults to the current directory).",
+        help="Directory to open. A host path in workspace mode, or a container path in native mode.",
     )
     add_simple_command("purge", "Delete the devbox. The shared /home/dev volume is kept.")
-
-    add_passthrough_command(
-        "exec",
-        "Run a command in the running devbox.",
-    )
 
     subparsers.add_parser(
         "purge-all",
@@ -1256,23 +1455,22 @@ def build_parser():
 
 
 def create_devbox(namespace, container_cli):
-    project_dir = ""
-    if hasattr(namespace, "project_directory"):
-        project_dir = project_path(namespace.project_directory)
+    workspace_dir = ""
+    if hasattr(namespace, "workspace") and namespace.workspace:
+        workspace_dir = workspace_path(namespace.workspace)
 
     command_args = getattr(namespace, "command_args", [])
-    execution_dir = getattr(namespace, "execution_dir", "")
+    execution_dir = getattr(namespace, "execution_dir", os.curdir)
     if namespace.command == "shell":
         execution_dir = namespace.directory
-    else:
+    elif namespace.command == "exec":
         command_args = list(command_args)
-        if command_args and command_args[0] != "--":
-            candidate = os.path.expanduser(command_args[0])
-            if candidate.startswith((".", os.path.sep, "~")):
-                execution_dir = command_args.pop(0)
+        if command_args and command_args[0] == "--":
+            command_args.pop(0)
 
-    devbox = DevBox(namespace.command, project_dir, command_args, container_cli, execution_dir)
+    devbox = DevBox(namespace.command, workspace_dir, command_args, container_cli, execution_dir)
     devbox.mounts = parse_mounts(getattr(namespace, "mounts", []))
+    devbox.named_volumes = parse_named_volumes(getattr(namespace, "volumes", []), devbox.mounts)
     devbox.nested_sandbox = getattr(namespace, "nested_sandbox", False)
     devbox.extra_args = list(getattr(namespace, "extra_args", []))
     return devbox
@@ -1311,8 +1509,10 @@ def main(argv=None):
         print(ENVIRONMENT_HELP.strip())
         return 0
 
-    if namespace.command == "exec" and not namespace.command_args:
-        parser.error("exec requires <command> [argument ...]")
+    if namespace.command == "exec":
+        command_args = namespace.command_args[1:] if namespace.command_args[:1] == ["--"] else namespace.command_args
+        if not command_args or not command_args[0]:
+            parser.error("exec requires <command> [argument ...]")
 
     container_cli = None
     if namespace.command != "compose":
