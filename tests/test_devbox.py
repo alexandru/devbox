@@ -57,6 +57,13 @@ class HelperTest(unittest.TestCase):
 
         self.assertIn("bubblewrap", dockerfile)
 
+    def test_dockerfile_installs_github_cli_from_official_repository(self):
+        dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
+
+        self.assertIn("https://cli.github.com/packages/githubcli-archive-keyring.gpg", dockerfile)
+        self.assertIn("https://cli.github.com/packages stable main", dockerfile)
+        self.assertIn("apt-get install -y --no-install-recommends gh", dockerfile)
+
     def test_agent_clis_are_not_bundled_or_updated(self):
         root = Path(__file__).parents[1]
         dockerfile = (root / "Dockerfile").read_text()
