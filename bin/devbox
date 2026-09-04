@@ -26,6 +26,7 @@ HOME_VOLUME_LABEL = "org.alexn.devbox.home-volume"
 MOUNTS_LABEL = "org.alexn.devbox.mounts"
 NESTED_SANDBOX_LABEL = "org.alexn.devbox.nested-sandbox"
 EXTRA_ARGS_LABEL = "org.alexn.devbox.extra-args"
+CONTAINER_SOCKET_LABEL = "org.alexn.devbox.container-socket"
 MODE_LABEL = "org.alexn.devbox.mode"
 WORKSPACE_LABEL = "org.alexn.devbox.workspace"
 WORKSPACE_LINK = "/workspace"
@@ -38,6 +39,7 @@ RESERVED_ENV_NAMES = frozenset(
         "DEVBOX_AGENT_PORT",
         "DEVBOX_HOME_VOLUME",
         "DEVBOX_HOME_VOLUME_PREFIX",
+        "DEVBOX_CONTAINER_SOCKET",
         "DEVBOX_WIREGUARD_CONFIG_PATH",
         "DEVBOX_WIREGUARD_CONFIG_STR",
         "DEVBOX_WIREGUARD_MTU",
@@ -324,6 +326,10 @@ class DevBox:
         self.wireguard_mtu = ""
         self.nested_sandbox = False
         self.extra_args = []
+        self.container_socket_request = ""
+        self.container_socket = ""
+        self.container_socket_gid = None
+        self.rootless_podman_socket = False
 
     def uses_wslc(self):
         return is_wslc_cli(self.container_cli)
@@ -399,6 +405,75 @@ class DevBox:
             raise SystemExit(
                 "Nested sandbox is not supported by wslc. Set CONTAINER_CLI=podman or CONTAINER_CLI=docker."
             )
+
+    def configure_container_socket(self):
+        if not self.container_socket_request:
+            return
+        if self.uses_wslc():
+            raise SystemExit(
+                "Container socket access is not supported by wslc. "
+                "Set CONTAINER_CLI=podman or CONTAINER_CLI=docker."
+            )
+
+        requested = self.container_socket_request
+        if requested == "auto":
+            requested = os.environ.get("DEVBOX_CONTAINER_SOCKET", "")
+        if not requested:
+            docker_host = os.environ.get("DOCKER_HOST", "")
+            if docker_host.startswith("unix://"):
+                requested = docker_host.removeprefix("unix://")
+
+        candidates = []
+        if requested:
+            candidates.append(os.path.expanduser(requested))
+        elif self.uses_podman():
+            runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "")
+            if runtime_dir:
+                candidates.append(os.path.join(runtime_dir, "podman", "podman.sock"))
+            candidates.extend(
+                [
+                    f"/run/user/{os.getuid()}/podman/podman.sock",
+                    "/run/podman/podman.sock",
+                ]
+            )
+        else:
+            candidates.extend(
+                [
+                    "/var/run/docker.sock",
+                    os.path.expanduser("~/.docker/run/docker.sock"),
+                ]
+            )
+
+        source = next((path for path in candidates if os.path.exists(path)), "")
+        if not source:
+            checked = ", ".join(candidates) or "no default paths"
+            raise SystemExit(
+                f"Container socket not found ({checked}). "
+                "Pass --container-socket HOST_PATH or set DEVBOX_CONTAINER_SOCKET."
+            )
+
+        self.container_socket = os.path.realpath(source)
+        self.container_socket_gid = os.stat(self.container_socket).st_gid
+        self.rootless_podman_socket = self.uses_podman() and self.container_socket.startswith("/run/user/")
+
+    def container_socket_args(self):
+        if not self.container_socket:
+            return []
+        args = [
+            "-v",
+            f"{self.container_socket}:/var/run/docker.sock",
+            "--group-add",
+            str(self.container_socket_gid),
+            "-e",
+            "DOCKER_HOST=unix:///var/run/docker.sock",
+            "-e",
+            "TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock",
+        ]
+        if self.rootless_podman_socket:
+            args.extend(["-e", "TESTCONTAINERS_RYUK_DISABLED=true"])
+        if self.uses_podman():
+            args.extend(["--security-opt", "label=disable"])
+        return args
 
     def wireguard_enabled(self):
         return bool(self.wireguard_config_host_path or self.wireguard_config_str)
@@ -581,6 +656,17 @@ class DevBox:
         )
         raise SystemExit(1)
 
+    def ensure_container_socket(self):
+        labels = self.container_inspect().get("Config", {}).get("Labels", {}) or {}
+        if labels.get(CONTAINER_SOCKET_LABEL, "") == self.container_socket:
+            return
+        print("Container already exists with different container socket access.", file=sys.stderr)
+        print(
+            f"Run `{sys.argv[0]} purge` and start it again to apply --container-socket.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
     def ensure_wireguard_config(self):
         mounted_path = self.container_mount_source(WIREGUARD_CONFIG_CONTAINER_PATH)
         container = self.container_inspect()
@@ -676,6 +762,7 @@ class DevBox:
             self.ensure_custom_mounts()
             self.ensure_nested_sandbox()
             self.ensure_extra_args()
+            self.ensure_container_socket()
             self.ensure_wireguard_config()
             self.ensure_agent_port()
             self.run_cli(
@@ -977,6 +1064,8 @@ class DevBox:
                 "--label",
                 f"{EXTRA_ARGS_LABEL}={self.extra_args_label()}",
                 "--label",
+                f"{CONTAINER_SOCKET_LABEL}={self.container_socket}",
+                "--label",
                 f"{MODE_LABEL}={self.mode}",
                 "--label",
                 f"{WORKSPACE_LABEL}={self.workspace_dir}",
@@ -988,6 +1077,7 @@ class DevBox:
                 *self.ssh_args(),
                 *self.container_env_args,
                 *self.custom_mount_args(),
+                *self.container_socket_args(),
                 *self.agent_port_args(),
                 *self.nested_sandbox_args(),
                 *self.wireguard_args(),
@@ -1014,6 +1104,8 @@ class DevBox:
         for volume in self.named_volumes:
             mode = volume.options or "rw"
             print(f"Volume:    {volume.source} -> {volume.target} ({mode})")
+        if self.container_socket:
+            print(f"Engine:    {self.container_socket} -> /var/run/docker.sock")
         print(
             "Shell:     "
             f"{shlex.quote(self.container_cli)} exec -it {shlex.quote(self.container_name)} bash"
@@ -1096,10 +1188,19 @@ class DevBox:
             for capability in capabilities:
                 print(f"      - {capability}")
 
+        security_options = []
         if self.nested_sandbox:
+            security_options.extend(("seccomp=unconfined", "apparmor=unconfined"))
+        if self.container_socket and self.uses_podman():
+            security_options.append("label=disable")
+        if security_options:
             print("    security_opt:")
-            print("      - seccomp=unconfined")
-            print("      - apparmor=unconfined")
+            for option in security_options:
+                print(f"      - {option}")
+
+        if self.container_socket_gid is not None:
+            print("    group_add:")
+            print(f"      - {yaml_quote(str(self.container_socket_gid))}")
 
         if self.wireguard_enabled():
             print("    sysctls:")
@@ -1113,6 +1214,7 @@ class DevBox:
         print(f"      {MOUNTS_LABEL}: {yaml_quote(self.mount_label())}")
         print(f"      {NESTED_SANDBOX_LABEL}: {yaml_quote(str(self.nested_sandbox).lower())}")
         print(f"      {EXTRA_ARGS_LABEL}: {yaml_quote(self.extra_args_label())}")
+        print(f"      {CONTAINER_SOCKET_LABEL}: {yaml_quote(self.container_socket)}")
         print(f"      {MODE_LABEL}: {yaml_quote(self.mode)}")
         print(f"      {WORKSPACE_LABEL}: {yaml_quote(self.workspace_dir)}")
 
@@ -1121,7 +1223,7 @@ class DevBox:
 
     def compose_environment(self):
         environment = configured_container_envs()
-        if not (environment or self.wireguard_enabled() or has_ssh_auth_sock()):
+        if not (environment or self.wireguard_enabled() or has_ssh_auth_sock() or self.container_socket):
             return
 
         print("    environment:")
@@ -1136,6 +1238,12 @@ class DevBox:
 
         if has_ssh_auth_sock():
             print('      SSH_AUTH_SOCK: "${SSH_AUTH_SOCK}"')
+
+        if self.container_socket:
+            print('      DOCKER_HOST: "unix:///var/run/docker.sock"')
+            print('      TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: "/var/run/docker.sock"')
+            if self.rootless_podman_socket:
+                print('      TESTCONTAINERS_RYUK_DISABLED: "true"')
 
     def compose_mounts(self):
         print("    volumes:")
@@ -1175,6 +1283,11 @@ class DevBox:
             print("      - type: bind")
             print('        source: "${SSH_AUTH_SOCK}"')
             print('        target: "${SSH_AUTH_SOCK}"')
+
+        if self.container_socket:
+            print("      - type: bind")
+            print(f"        source: {yaml_quote(self.container_socket)}")
+            print('        target: "/var/run/docker.sock"')
 
     def compose_volumes(self):
         print()
@@ -1341,6 +1454,7 @@ Environment:
   DEVBOX_AGENT_PORT                 Host port for container port 10012; `start` defaults to {DEFAULT_AGENT_PORT}.
   DEVBOX_HOME_VOLUME                Shared /home/dev volume name. Defaults to {HOME_VOLUME_NAME}.
   DEVBOX_HOME_VOLUME_PREFIX         Legacy per-workspace /home/dev volume prefix removed by purge-all. Defaults to {LEGACY_HOME_VOLUME_PREFIX}.
+  DEVBOX_CONTAINER_SOCKET           Host engine socket used by --container-socket when auto-detection is enabled.
   DEVBOX_WIREGUARD_CONFIG_PATH      Optional path to a WireGuard configuration file. Mutually exclusive with DEVBOX_WIREGUARD_CONFIG_STR.
   DEVBOX_WIREGUARD_CONFIG_STR       Optional WireGuard configuration string written to a file inside the container. Mutually exclusive with DEVBOX_WIREGUARD_CONFIG_PATH.
   DEVBOX_WIREGUARD_MTU              Tunnel MTU used when WireGuard is enabled. Defaults to 1420; lower it if large transfers stall. Valid range: 576-9000.
@@ -1359,7 +1473,20 @@ def build_parser():
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     def add_workspace_command(name, help_text):
-        command_parser = subparsers.add_parser(name, help=help_text, description=help_text)
+        command_parser = subparsers.add_parser(
+            name,
+            help=help_text,
+            description=help_text,
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            epilog="""Container engine access:
+  --container-socket mounts the selected Docker or Podman API socket at
+  /var/run/docker.sock and configures Testcontainers. This grants the devbox
+  root-equivalent control of the engine, so it is disabled by default.
+
+  Omit HOST_PATH to auto-detect the socket. Rootless Podman disables Ryuk as
+  required by Testcontainers. wslc does not expose its engine API socket and
+  cannot support this option.""",
+        )
         command_parser.add_argument(
             "--workspace",
             dest="workspace",
@@ -1374,6 +1501,14 @@ def build_parser():
             default=[],
             metavar="HOST:CONTAINER[:OPTIONS]",
             help="Bind-mount an existing host file or directory. Repeatable; ~ is not expanded.",
+        )
+        command_parser.add_argument(
+            "--container-socket",
+            nargs="?",
+            const="auto",
+            default="",
+            metavar="HOST_PATH",
+            help="Expose the Docker-compatible engine socket. Auto-detects Docker or Podman when HOST_PATH is omitted; not supported by wslc.",
         )
         command_parser.add_argument(
             "--nested-sandbox",
@@ -1473,6 +1608,7 @@ def create_devbox(namespace, container_cli):
     devbox.named_volumes = parse_named_volumes(getattr(namespace, "volumes", []), devbox.mounts)
     devbox.nested_sandbox = getattr(namespace, "nested_sandbox", False)
     devbox.extra_args = list(getattr(namespace, "extra_args", []))
+    devbox.container_socket_request = getattr(namespace, "container_socket", "")
     return devbox
 
 
@@ -1514,7 +1650,7 @@ def main(argv=None):
         if not command_args or not command_args[0]:
             parser.error("exec requires <command> [argument ...]")
 
-    container_cli = None
+    container_cli = os.environ.get("CONTAINER_CLI", "docker") if namespace.command == "compose" else None
     if namespace.command != "compose":
         container_cli = find_container_cli()
         if not container_cli:
@@ -1529,6 +1665,7 @@ def main(argv=None):
     if namespace.command in {"start", "restart", "shell", "exec", "compose"}:
         devbox.configure_wireguard()
         devbox.configure_nested_sandbox()
+        devbox.configure_container_socket()
 
     devbox.configure_agent_port()
     devbox.configure_container_env_args()

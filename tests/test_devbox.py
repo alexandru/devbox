@@ -100,6 +100,18 @@ class HelperTest(unittest.TestCase):
             with self.subTest(example=example):
                 self.assertIn(example, readme)
 
+    def test_start_help_explains_opt_in_testcontainers_support(self):
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            with self.assertRaisesRegex(SystemExit, "0"):
+                DEVBOX["main"](["start", "--help"])
+
+        help_text = stdout.getvalue()
+        self.assertIn("--container-socket", help_text)
+        self.assertIn("Testcontainers", help_text)
+        self.assertIn("root-equivalent control", help_text)
+        self.assertIn("Rootless Podman", help_text)
+        self.assertIn("wslc", help_text)
+
     def test_dockerfile_disables_cellar_telemetry_as_dev_user(self):
         dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
 
@@ -523,6 +535,21 @@ class ConfigurationTest(unittest.TestCase):
         self.assertIn('org.alexn.devbox: "true"', output)
         self.assertNotIn('org.alexn.devbox: "true"', output[output.index(f"  {key}:"):])
 
+    def test_compose_exposes_configured_container_socket(self):
+        instance = new_devbox("compose", container_cli="docker")
+        instance.container_socket = "/var/run/docker.sock"
+        instance.container_socket_gid = 998
+
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            instance.compose_service()
+
+        output = stdout.getvalue()
+        self.assertIn('DOCKER_HOST: "unix:///var/run/docker.sock"', output)
+        self.assertIn('TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: "/var/run/docker.sock"', output)
+        self.assertIn('group_add:\n      - "998"', output)
+        self.assertIn('source: "/var/run/docker.sock"', output)
+        self.assertIn('target: "/var/run/docker.sock"', output)
+
     def test_compose_workspace_mode_uses_workspace_workdir_and_bind(self):
         instance = new_devbox("compose", workspace_dir="/host/workspace")
         instance.workspace_mount_dir = "/host"
@@ -697,6 +724,52 @@ class ConfigurationTest(unittest.TestCase):
 
 
 class ContainerExecutionTest(unittest.TestCase):
+    def test_docker_container_socket_adds_mount_environment_and_socket_group(self):
+        instance = new_devbox("start", container_cli="docker")
+        instance.container_socket_request = "/var/run/docker.sock"
+
+        with mock.patch.object(DEVBOX["os"].path, "exists", return_value=True), mock.patch.object(
+            DEVBOX["os"], "stat", return_value=mock.Mock(st_gid=998)
+        ):
+            instance.configure_container_socket()
+
+        with mock.patch.object(instance, "run_cli") as run_cli:
+            instance.run_new_container()
+
+        command = run_cli.call_args.args[0]
+        self.assertIn(f"{os.path.realpath('/var/run/docker.sock')}:/var/run/docker.sock", command)
+        self.assertIn("DOCKER_HOST=unix:///var/run/docker.sock", command)
+        self.assertIn("TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock", command)
+        self.assertEqual(command[command.index("--group-add") + 1], "998")
+
+    def test_rootless_podman_socket_uses_docker_api_compatibility_settings(self):
+        instance = new_devbox("start", container_cli="podman")
+        instance.container_socket_request = "auto"
+
+        with mock.patch.dict(
+            os.environ,
+            {"DEVBOX_CONTAINER_SOCKET": "/run/user/1000/podman/podman.sock"},
+            clear=True,
+        ), mock.patch.object(DEVBOX["os"].path, "exists", return_value=True), mock.patch.object(
+            DEVBOX["os"], "stat", return_value=mock.Mock(st_gid=1000)
+        ):
+            instance.configure_container_socket()
+
+        with mock.patch.object(instance, "run_cli") as run_cli:
+            instance.run_new_container()
+
+        command = run_cli.call_args.args[0]
+        self.assertIn("/run/user/1000/podman/podman.sock:/var/run/docker.sock", command)
+        self.assertIn("TESTCONTAINERS_RYUK_DISABLED=true", command)
+        self.assertIn("label=disable", command)
+
+    def test_container_socket_fails_early_with_explanation_on_wslc(self):
+        instance = new_devbox("start", container_cli="wslc.exe")
+        instance.container_socket_request = "auto"
+
+        with self.assertRaisesRegex(SystemExit, "Container socket.*wslc"):
+            instance.configure_container_socket()
+
     def test_container_native_paths_resolve_without_host_preflight(self):
         instance = new_devbox("exec", execution_dir="~/projects", container_cli="docker")
         instance.mode = "container-native"
