@@ -29,6 +29,7 @@ EXTRA_ARGS_LABEL = "org.alexn.devbox.extra-args"
 CONTAINER_SOCKET_LABEL = "org.alexn.devbox.container-socket"
 MODE_LABEL = "org.alexn.devbox.mode"
 WORKSPACE_LABEL = "org.alexn.devbox.workspace"
+SSH_PORT_LABEL = "org.alexn.devbox.ssh-port"
 WORKSPACE_LINK = "/workspace"
 CONTAINER_USER = "dev"
 ROOT_USER = "root"
@@ -78,6 +79,12 @@ def canonical_file(path, description):
         print(f"{description} file does not exist: {path}", file=sys.stderr)
         raise SystemExit(1)
     return os.path.realpath(path)
+
+
+def tcp_port(value):
+    if not re.fullmatch(r"[0-9]+", value) or not 1 <= int(value) <= 65535:
+        raise argparse.ArgumentTypeError("must be an integer from 1 through 65535")
+    return value
 
 
 def workspace_path(path):
@@ -330,6 +337,7 @@ class DevBox:
         self.container_socket = ""
         self.container_socket_gid = None
         self.rootless_podman_socket = False
+        self.ssh_port = ""
 
     def uses_wslc(self):
         return is_wslc_cli(self.container_cli)
@@ -488,6 +496,8 @@ class DevBox:
         self.agent_port = os.environ.get("DEVBOX_AGENT_PORT", "")
         if self.command in {"start", "compose"} and not self.agent_port:
             self.agent_port = DEFAULT_AGENT_PORT
+        if self.ssh_port and self.ssh_port == self.agent_port:
+            raise SystemExit("SSH host port must differ from the agent host port.")
 
     def container_inspect(self):
         return self.inspect_object(self.container_name)
@@ -705,6 +715,18 @@ class DevBox:
         )
         raise SystemExit(1)
 
+    def ensure_ssh_port(self):
+        labels = self.container_inspect().get("Config", {}).get("Labels", {}) or {}
+        if labels.get(SSH_PORT_LABEL, "") == self.ssh_port:
+            return
+
+        print("Container already exists with a different SSH port.", file=sys.stderr)
+        print(
+            f"Run `{sys.argv[0]} purge` and start it again to apply --ssh-port.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
     def ensure_workspace_configuration(self):
         container = self.container_inspect()
         running_mode = self.container_mode(container)
@@ -765,6 +787,7 @@ class DevBox:
             self.ensure_container_socket()
             self.ensure_wireguard_config()
             self.ensure_agent_port()
+            self.ensure_ssh_port()
             self.run_cli(
                 ["start", self.container_name],
                 stdout=subprocess.DEVNULL,
@@ -825,7 +848,7 @@ class DevBox:
             stderr=subprocess.DEVNULL,
         )
 
-    def ssh_args(self):
+    def ssh_agent_args(self):
         if not has_ssh_auth_sock():
             return []
 
@@ -855,6 +878,12 @@ class DevBox:
             return []
 
         return ["-p", f"{self.agent_port}:10012"]
+
+    def ssh_port_args(self):
+        if not self.ssh_port:
+            return []
+
+        return ["-p", f"127.0.0.1:{self.ssh_port}:22"]
 
     def container_wireguard_status(self):
         result = self.run_cli(
@@ -932,6 +961,12 @@ class DevBox:
                     source = mount.get("Name", "")
                     mode = "rw" if mount.get("RW", True) else "ro"
                     print(f"  {source} -> {mount.get('Destination', '')} ({mode})")
+
+        ssh_port = (config.get("Labels", {}) or {}).get(SSH_PORT_LABEL, "")
+        if ssh_port:
+            print(f"SSH:       dev@localhost:{ssh_port}")
+        else:
+            print("SSH:       disabled")
 
         ports = self.container_agent_ports(container)
         if ports:
@@ -1015,14 +1050,17 @@ class DevBox:
 
     def workspace_link_command(self):
         initialization = self.custom_volume_initialization()
+        keepalive = "exec sleep infinity"
+        if self.ssh_port:
+            keepalive = f"devbox-start-sshd && {keepalive}"
         if self.mode == "workspace":
             command = (
                 f"rm -rf {WORKSPACE_LINK} && "
                 f"ln -s {shlex.quote(self.workspace_container_dir)} {WORKSPACE_LINK} && "
-                "exec sleep infinity"
+                f"{keepalive}"
             )
         else:
-            command = "exec sleep infinity"
+            command = keepalive
         if initialization:
             command = f"{initialization} && {command}"
         if self.wireguard_enabled():
@@ -1069,16 +1107,19 @@ class DevBox:
                 f"{MODE_LABEL}={self.mode}",
                 "--label",
                 f"{WORKSPACE_LABEL}={self.workspace_dir}",
+                "--label",
+                f"{SSH_PORT_LABEL}={self.ssh_port}",
                 "--user",
                 ROOT_USER,
                 *workspace_args,
                 "-v",
                 f"{self.home_volume}:/home/dev",
-                *self.ssh_args(),
+                *self.ssh_agent_args(),
                 *self.container_env_args,
                 *self.custom_mount_args(),
                 *self.container_socket_args(),
                 *self.agent_port_args(),
+                *self.ssh_port_args(),
                 *self.nested_sandbox_args(),
                 *self.wireguard_args(),
                 *self.extra_args,
@@ -1106,6 +1147,8 @@ class DevBox:
             print(f"Volume:    {volume.source} -> {volume.target} ({mode})")
         if self.container_socket:
             print(f"Engine:    {self.container_socket} -> /var/run/docker.sock")
+        if self.ssh_port:
+            print(f"SSH:       dev@localhost:{self.ssh_port}")
         print(
             "Shell:     "
             f"{shlex.quote(self.container_cli)} exec -it {shlex.quote(self.container_name)} bash"
@@ -1174,9 +1217,12 @@ class DevBox:
         print("      - -lc")
         print(f"      - {yaml_quote(self.workspace_link_command())}")
 
-        if self.agent_port:
+        if self.agent_port or self.ssh_port:
             print("    ports:")
-            print('      - "${DEVBOX_AGENT_PORT}:10012"')
+            if self.agent_port:
+                print('      - "${DEVBOX_AGENT_PORT}:10012"')
+            if self.ssh_port:
+                print(f"      - {yaml_quote(f'127.0.0.1:{self.ssh_port}:22')}")
 
         capabilities = []
         if self.nested_sandbox:
@@ -1217,6 +1263,7 @@ class DevBox:
         print(f"      {CONTAINER_SOCKET_LABEL}: {yaml_quote(self.container_socket)}")
         print(f"      {MODE_LABEL}: {yaml_quote(self.mode)}")
         print(f"      {WORKSPACE_LABEL}: {yaml_quote(self.workspace_dir)}")
+        print(f"      {SSH_PORT_LABEL}: {yaml_quote(self.ssh_port)}")
 
         self.compose_environment()
         self.compose_mounts()
@@ -1485,7 +1532,12 @@ def build_parser():
 
   Omit HOST_PATH to auto-detect the socket. Rootless Podman disables Ryuk as
   required by Testcontainers. wslc does not expose its engine API socket and
-  cannot support this option.""",
+  cannot support this option.
+
+Remote IDE access:
+  --ssh-port starts key-only OpenSSH and binds it to 127.0.0.1 on the host.
+  Add the client's public key to /home/dev/.ssh/authorized_keys before connecting.
+  IntelliJ IDEA can then connect through Remote Development over SSH.""",
         )
         command_parser.add_argument(
             "--workspace",
@@ -1514,6 +1566,12 @@ def build_parser():
             "--nested-sandbox",
             action="store_true",
             help="Allow Bubblewrap's nested sandbox. Supported by Docker and Podman, not wslc.",
+        )
+        command_parser.add_argument(
+            "--ssh-port",
+            metavar="HOST_PORT",
+            type=tcp_port,
+            help="Publish SSH on 127.0.0.1:HOST_PORT for remote IDE connections.",
         )
         command_parser.add_argument(
             "--extra-args",
@@ -1609,6 +1667,7 @@ def create_devbox(namespace, container_cli):
     devbox.nested_sandbox = getattr(namespace, "nested_sandbox", False)
     devbox.extra_args = list(getattr(namespace, "extra_args", []))
     devbox.container_socket_request = getattr(namespace, "container_socket", "")
+    devbox.ssh_port = getattr(namespace, "ssh_port", None) or ""
     return devbox
 
 

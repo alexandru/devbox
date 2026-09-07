@@ -13,34 +13,41 @@ RUN apt-get update && \
     apt-get upgrade -y && \
     apt-get install -y --no-install-recommends \
     binutils \
-    bubblewrap \
     bsdextrautils \
-        ca-certificates \
-        curl \
-        direnv \
-        fd-find \
-        file \
-        git \
-        jq \
-        iproute2 \
-        iptables \
-        gnupg \
-        less \
-        make \
-        neovim \
-        openssh-client \
-        patch \
-        procps \
-        ripgrep \
-        sudo \
-        tar \
-        tree \
-        unzip \
-        wget \
-        wireguard-tools \
-        zip && \
+    bubblewrap \
+    ca-certificates \
+    curl \
+    direnv \
+    fd-find \
+    file \
+    git \
+    gnupg \
+    iproute2 \
+    iptables \
+    jq \
+    less \
+    libfreetype6 \
+    libxext6 \
+    libxi6 \
+    libxrender1 \
+    libxtst6 \
+    make \
+    neovim \
+    openssh-client \
+    openssh-server \
+    patch \
+    procps \
+    ripgrep \
+    sudo \
+    tar \
+    tree \
+    unzip \
+    wget \
+    wireguard-tools \
+    zip && \
     rm -rf /var/lib/apt/lists/* && \
-    rm -rf /tmp/*
+    rm -rf /tmp/* && \
+    rm -f /etc/ssh/ssh_host_*
 
 # GitHub CLI
 RUN mkdir -p -m 0755 /etc/apt/keyrings && \
@@ -103,9 +110,11 @@ RUN if getent passwd "$USER_UID" >/dev/null; then \
     fi
 
 RUN echo "dev ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/dev && \
-    chmod 0440 /etc/sudoers.d/dev
+    chmod 0440 /etc/sudoers.d/dev && \
+    usermod --password '*' dev
 
-RUN mkdir -p /workspaces /home/dev/.config && \
+RUN mkdir -p /run/sshd /workspaces /home/dev/.config && \
+    chmod 0755 /run/sshd && \
     chown -R dev:dev /opt/sdkman /workspaces /home/dev
 
 ENV HOME=/home/dev
@@ -114,14 +123,17 @@ ENV PATH="/home/dev/bin:/home/dev/.local/bin:/home/dev/.local/share/coursier/bin
 # Container helper scripts
 COPY bin/devbox-entrypoint /usr/local/bin/devbox-entrypoint
 COPY bin/devbox-install-user-files /usr/local/bin/devbox-install-user-files
+COPY bin/devbox-start-sshd /usr/local/bin/devbox-start-sshd
 COPY bin/osc52-clipboard /usr/local/bin/osc52-clipboard
 COPY bin/resolvconf /usr/local/bin/resolvconf
 COPY bin/update-all /usr/local/share/devbox/update-all
+COPY etc/ssh/sshd_config.d/devbox.conf /etc/ssh/sshd_config.d/devbox.conf
 COPY home/.devboxrc /usr/local/share/devbox/devboxrc
 
 RUN chmod 0755 \
     /usr/local/bin/devbox-entrypoint \
     /usr/local/bin/devbox-install-user-files \
+    /usr/local/bin/devbox-start-sshd \
     /usr/local/bin/osc52-clipboard \
     /usr/local/bin/resolvconf
 
@@ -148,6 +160,6 @@ RUN cs install --contrib cellar && \
 
 # Runtime
 VOLUME ["/home/dev"]
-EXPOSE 10012
+EXPOSE 22 10012
 ENTRYPOINT ["/usr/local/bin/devbox-entrypoint"]
 CMD ["bash"]

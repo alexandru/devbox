@@ -57,6 +57,28 @@ class HelperTest(unittest.TestCase):
 
         self.assertIn("bubblewrap", dockerfile)
 
+    def test_image_has_gateway_ssh_server_dependencies_and_configuration(self):
+        root = Path(__file__).parents[1]
+        dockerfile = (root / "Dockerfile").read_text()
+        sshd_config = (root / "etc" / "ssh" / "sshd_config.d" / "devbox.conf").read_text()
+
+        for package in (
+            "openssh-server",
+            "libfreetype6",
+            "libxext6",
+            "libxi6",
+            "libxrender1",
+            "libxtst6",
+        ):
+            with self.subTest(package=package):
+                self.assertIn(package, dockerfile)
+        self.assertIn("COPY etc/ssh/sshd_config.d/devbox.conf", dockerfile)
+        self.assertIn("COPY bin/devbox-start-sshd", dockerfile)
+        self.assertIn("AuthenticationMethods publickey", sshd_config)
+        self.assertIn("AuthorizedKeysFile .ssh/authorized_keys", sshd_config)
+        self.assertIn("AllowTcpForwarding yes", sshd_config)
+        self.assertIn("PermitRootLogin no", sshd_config)
+
     def test_dockerfile_installs_github_cli_from_official_repository(self):
         dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
 
@@ -100,6 +122,18 @@ class HelperTest(unittest.TestCase):
             with self.subTest(example=example):
                 self.assertIn(example, readme)
 
+    def test_readme_documents_intellij_remote_development(self):
+        readme = (Path(__file__).parents[1] / "README.md").read_text()
+
+        for expected in (
+            "--ssh-port 2222",
+            "/home/dev/.ssh/authorized_keys",
+            "Remote Development",
+            "dev@localhost:2222",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, readme)
+
     def test_start_help_explains_opt_in_testcontainers_support(self):
         with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
             with self.assertRaisesRegex(SystemExit, "0"):
@@ -111,6 +145,17 @@ class HelperTest(unittest.TestCase):
         self.assertIn("root-equivalent control", help_text)
         self.assertIn("Rootless Podman", help_text)
         self.assertIn("wslc", help_text)
+
+    def test_start_help_explains_remote_ide_ssh_authentication(self):
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            with self.assertRaisesRegex(SystemExit, "0"):
+                DEVBOX["main"](["start", "--help"])
+
+        help_text = stdout.getvalue()
+        self.assertIn("--ssh-port", help_text)
+        self.assertIn("/home/dev/.ssh/authorized_keys", help_text)
+        self.assertIn("key-only", help_text)
+        self.assertIn("127.0.0.1", help_text)
 
     def test_dockerfile_disables_cellar_telemetry_as_dev_user(self):
         dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
@@ -433,6 +478,14 @@ class ConfigurationTest(unittest.TestCase):
                     instance.configure_agent_port()
                     self.assertEqual(instance.agent_port, "10012")
 
+    def test_ssh_port_rejects_the_agent_host_port(self):
+        instance = new_devbox("start")
+        instance.ssh_port = "10012"
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(SystemExit, "SSH host port.*agent host port"):
+                instance.configure_agent_port()
+
     def test_generic_environment_arguments_include_empty_values(self):
         instance = new_devbox()
         globals_ = instance.configure_container_env_args.__globals__
@@ -563,6 +616,18 @@ class ConfigurationTest(unittest.TestCase):
         self.assertIn('working_dir: "/workspace/workspace"', output)
         self.assertIn('source: "/host"', output)
         self.assertIn('target: "/workspace"', output)
+
+    def test_compose_publishes_ssh_on_loopback_and_starts_the_server(self):
+        instance = new_devbox("compose")
+        instance.ssh_port = "2222"
+
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            instance.compose_service()
+
+        output = stdout.getvalue()
+        self.assertIn('      - "127.0.0.1:2222:22"', output)
+        self.assertIn('org.alexn.devbox.ssh-port: "2222"', output)
+        self.assertIn("devbox-start-sshd", output)
 
     def test_wireguard_is_disabled_without_configuration(self):
         instance = new_devbox()
@@ -724,6 +789,18 @@ class ConfigurationTest(unittest.TestCase):
 
 
 class ContainerExecutionTest(unittest.TestCase):
+    def test_ssh_port_publishes_on_loopback_and_starts_the_server(self):
+        instance = new_devbox("start", container_cli="docker")
+        instance.ssh_port = "2222"
+
+        with mock.patch.object(instance, "run_cli") as run_cli:
+            instance.run_new_container()
+
+        command = run_cli.call_args.args[0]
+        self.assertIn("127.0.0.1:2222:22", command)
+        self.assertIn("org.alexn.devbox.ssh-port=2222", command)
+        self.assertIn("devbox-start-sshd && exec sleep infinity", command[-1])
+
     def test_docker_container_socket_adds_mount_environment_and_socket_group(self):
         instance = new_devbox("start", container_cli="docker")
         instance.container_socket_request = "/var/run/docker.sock"
@@ -928,6 +1005,20 @@ class ContainerExecutionTest(unittest.TestCase):
 
         self.assertIn("purge", stderr.getvalue())
 
+    def test_ssh_port_mismatch_requires_purge(self):
+        instance = new_devbox(container_cli="docker")
+        instance.ssh_port = "2222"
+
+        with mock.patch.object(
+            instance,
+            "container_inspect",
+            return_value={"Config": {"Labels": {DEVBOX["SSH_PORT_LABEL"]: "2200"}}},
+        ), mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            with self.assertRaisesRegex(SystemExit, "1"):
+                instance.ensure_ssh_port()
+
+        self.assertIn("purge", stderr.getvalue())
+
     def test_nested_sandbox_adds_runtime_arguments(self):
         instance = new_devbox(container_cli="docker")
         instance.nested_sandbox = True
@@ -1061,6 +1152,16 @@ class ContainerExecutionTest(unittest.TestCase):
 
 
 class StatusTest(unittest.TestCase):
+    def test_start_summary_reports_remote_ide_connection(self):
+        instance = new_devbox("start", container_cli="docker")
+        instance.mode = "container-native"
+        instance.ssh_port = "2222"
+
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            instance.print_start_summary()
+
+        self.assertIn("SSH:       dev@localhost:2222", stdout.getvalue())
+
     def test_status_reports_missing_container(self):
         instance = new_devbox("status", container_cli="wslc.exe")
 
@@ -1081,6 +1182,7 @@ class StatusTest(unittest.TestCase):
                 "Image": "devbox:test",
                 "WorkingDir": "/workspace/project",
                 "Env": ["DEVBOX_WIREGUARD_MTU=1420", "SECRET=hidden"],
+                "Labels": {DEVBOX["SSH_PORT_LABEL"]: "2222"},
             },
             "State": {"Running": True, "Status": "running", "StartedAt": "2026-07-12T10:00:01Z"},
             "Mounts": [
@@ -1088,7 +1190,12 @@ class StatusTest(unittest.TestCase):
                 {"Name": "devbox-home", "Destination": "/home/dev", "RW": True},
                 {"Source": "/host/wg.conf", "Destination": "/etc/wireguard/devbox.conf", "RW": False},
             ],
-            "HostConfig": {"PortBindings": {"10012/tcp": [{"HostPort": "10012"}]}},
+            "HostConfig": {
+                "PortBindings": {
+                    "22/tcp": [{"HostIp": "127.0.0.1", "HostPort": "2222"}],
+                    "10012/tcp": [{"HostPort": "10012"}],
+                }
+            },
         }
 
         with mock.patch.object(instance, "container_inspect", return_value=container), mock.patch.object(
@@ -1105,6 +1212,7 @@ class StatusTest(unittest.TestCase):
             "Workdir:   /workspace/project",
             "/host/project -> /workspace/project (rw)",
             "devbox-home -> /home/dev (rw)",
+            "SSH:       dev@localhost:2222",
             "Agent:     localhost:10012 -> 10012/tcp",
             "WireGuard: enabled; config=/host/wg.conf; MTU=1420",
             "Tunnel:    active; latest handshake 30 seconds ago",
@@ -1196,6 +1304,24 @@ class ParserTest(unittest.TestCase):
             with self.subTest(command=command):
                 namespace = parser.parse_args([command, "--nested-sandbox"])
                 self.assertTrue(namespace.nested_sandbox)
+
+    def test_start_and_compose_parse_optional_ssh_port(self):
+        parser = DEVBOX["build_parser"]()
+
+        for command in ("start", "compose"):
+            with self.subTest(command=command):
+                namespace = parser.parse_args([command, "--ssh-port", "2222"])
+                instance = DEVBOX["create_devbox"](namespace, "docker")
+
+                self.assertEqual(instance.ssh_port, "2222")
+
+    def test_ssh_port_rejects_values_outside_the_tcp_port_range(self):
+        parser = DEVBOX["build_parser"]()
+
+        for value in ("0", "65536", "not-a-port"):
+            with self.subTest(value=value), mock.patch("sys.stderr", new_callable=io.StringIO):
+                with self.assertRaisesRegex(SystemExit, "2"):
+                    parser.parse_args(["start", "--ssh-port", value])
 
     def test_start_and_compose_parse_repeated_named_volumes(self):
         parser = DEVBOX["build_parser"]()

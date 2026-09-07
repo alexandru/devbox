@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+host_key_dir=/home/dev/.local/share/devbox/sshd
+host_key="$host_key_dir/ssh_host_ed25519_key"
+
+install -d -o dev -g dev -m 0755 /home/dev/.local /home/dev/.local/share /home/dev/.local/share/devbox
+install -d -o root -g root -m 0700 "$host_key_dir"
+install -d -o root -g root -m 0755 /run/sshd
+
+if [[ ! -s "$host_key" || ! -s "$host_key.pub" ]]; then
+    rm -f "$host_key" "$host_key.pub"
+    ssh-keygen -q -t ed25519 -N '' -f "$host_key"
+fi
+
+chown root:root "$host_key" "$host_key.pub"
+chmod 0600 "$host_key"
+chmod 0644 "$host_key.pub"
+rm -f /run/sshd.pid
+
+/usr/sbin/sshd -t -h "$host_key"
+/usr/sbin/sshd -h "$host_key"
