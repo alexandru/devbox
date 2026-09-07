@@ -57,6 +57,11 @@ class HelperTest(unittest.TestCase):
 
         self.assertIn("bubblewrap", dockerfile)
 
+    def test_dockerfile_installs_tmux(self):
+        dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
+
+        self.assertIn("tmux", dockerfile)
+
     def test_image_has_gateway_ssh_server_dependencies_and_configuration(self):
         root = Path(__file__).parents[1]
         dockerfile = (root / "Dockerfile").read_text()

@@ -4,3 +4,6 @@ export SDKMAN_DIR=/opt/sdkman
 if [ -s "$SDKMAN_DIR/bin/sdkman-init.sh" ]; then
     source "$SDKMAN_DIR/bin/sdkman-init.sh"
 fi
+
+# Starts the SSH agent in the login shell
+eval $(ssh-agent -s)

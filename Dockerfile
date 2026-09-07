@@ -40,6 +40,7 @@ RUN apt-get update && \
     ripgrep \
     sudo \
     tar \
+    tmux \
     tree \
     unzip \
     wget \
