@@ -5,6 +5,8 @@ ARG USER_GID="1000"
 ARG NODE_MAJOR="24"
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+ENV LC_CTYPE=C.UTF-8
 ENV SDKMAN_DIR=/opt/sdkman
 ENV SHELL=/bin/bash
 
@@ -22,6 +24,7 @@ RUN apt-get update && \
     file \
     git \
     gnupg \
+    htop \
     iproute2 \
     iptables \
     jq \
