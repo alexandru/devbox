@@ -11,7 +11,6 @@ import posixpath
 import re
 import shlex
 import shutil
-import stat
 import subprocess
 import sys
 import time
@@ -274,16 +273,6 @@ def parse_named_volumes(specifications, mounts=()):
         targets.add(target)
         volumes.append(Mount(specification, name, target, options, "volume"))
     return volumes
-
-
-def has_ssh_auth_sock():
-    path = os.environ.get("SSH_AUTH_SOCK", "")
-    if not path:
-        return False
-    try:
-        return stat.S_ISSOCK(os.stat(path).st_mode)
-    except OSError:
-        return False
 
 
 def find_container_cli():
@@ -848,13 +837,6 @@ class DevBox:
             stderr=subprocess.DEVNULL,
         )
 
-    def ssh_agent_args(self):
-        if not has_ssh_auth_sock():
-            return []
-
-        ssh_auth_sock = os.environ["SSH_AUTH_SOCK"]
-        return ["-v", f"{ssh_auth_sock}:{ssh_auth_sock}", "-e", f"SSH_AUTH_SOCK={ssh_auth_sock}"]
-
     def custom_mount_args(self):
         arguments = []
         for mount in [*self.mounts, *self.named_volumes]:
@@ -1114,7 +1096,6 @@ class DevBox:
                 *workspace_args,
                 "-v",
                 f"{self.home_volume}:/home/dev",
-                *self.ssh_agent_args(),
                 *self.container_env_args,
                 *self.custom_mount_args(),
                 *self.container_socket_args(),
@@ -1270,7 +1251,7 @@ class DevBox:
 
     def compose_environment(self):
         environment = configured_container_envs()
-        if not (environment or self.wireguard_enabled() or has_ssh_auth_sock() or self.container_socket):
+        if not (environment or self.wireguard_enabled() or self.container_socket):
             return
 
         print("    environment:")
@@ -1282,9 +1263,6 @@ class DevBox:
             print(f"      DEVBOX_WIREGUARD_MTU: {yaml_quote(self.wireguard_mtu)}")
             if self.wireguard_config_str:
                 print('      DEVBOX_WIREGUARD_CONFIG_STR: "${DEVBOX_WIREGUARD_CONFIG_STR}"')
-
-        if has_ssh_auth_sock():
-            print('      SSH_AUTH_SOCK: "${SSH_AUTH_SOCK}"')
 
         if self.container_socket:
             print('      DOCKER_HOST: "unix:///var/run/docker.sock"')
@@ -1325,11 +1303,6 @@ class DevBox:
             print('        source: "${DEVBOX_WIREGUARD_CONFIG_PATH}"')
             print(f"        target: {yaml_quote(WIREGUARD_CONFIG_CONTAINER_PATH)}")
             print("        read_only: true")
-
-        if has_ssh_auth_sock():
-            print("      - type: bind")
-            print('        source: "${SSH_AUTH_SOCK}"')
-            print('        target: "${SSH_AUTH_SOCK}"')
 
         if self.container_socket:
             print("      - type: bind")

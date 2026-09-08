@@ -531,6 +531,18 @@ class ConfigurationTest(unittest.TestCase):
         self.assertIn('TOKEN: "${DEVBOX_TOKEN}"', output)
         self.assertNotIn("secret", output)
 
+    def test_compose_does_not_forward_ssh_auth_sock(self):
+        instance = new_devbox("compose")
+
+        with mock.patch.dict(os.environ, {"SSH_AUTH_SOCK": "/tmp/test-agent.sock"}, clear=True), mock.patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout:
+            instance.compose_environment()
+            instance.compose_mounts()
+
+        self.assertNotIn("SSH_AUTH_SOCK", stdout.getvalue())
+        self.assertNotIn("/tmp/test-agent.sock", stdout.getvalue())
+
     def test_compose_prints_structured_custom_mount_with_read_only(self):
         mount = DEVBOX["Mount"]("/host data:/home/dev/data:ro", "/host data", "/home/dev/data", "ro")
         instance = new_devbox("compose")
@@ -794,6 +806,18 @@ class ConfigurationTest(unittest.TestCase):
 
 
 class ContainerExecutionTest(unittest.TestCase):
+    def test_run_new_container_does_not_mount_ssh_auth_sock(self):
+        instance = new_devbox("start", container_cli="docker")
+
+        with mock.patch.dict(os.environ, {"SSH_AUTH_SOCK": "/tmp/test-agent.sock"}, clear=True), mock.patch.object(
+            instance, "run_cli"
+        ) as run_cli:
+            instance.run_new_container()
+
+        command = run_cli.call_args.args[0]
+        self.assertNotIn("/tmp/test-agent.sock", " ".join(command))
+        self.assertNotIn("SSH_AUTH_SOCK", " ".join(command))
+
     def test_ssh_port_publishes_on_loopback_and_starts_the_server(self):
         instance = new_devbox("start", container_cli="docker")
         instance.ssh_port = "2222"
